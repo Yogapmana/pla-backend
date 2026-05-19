@@ -62,3 +62,105 @@ class LearningService:
         )
         messages = result.scalars().all()
         return list(reversed(messages))  # oldest first
+
+    async def create_session(self, user_id: UUID, topic: str, level: str, duration_weeks: int, hours_per_day: float, language: str = "id") -> LearningSession:
+        session = LearningSession(
+            user_id=user_id,
+            topic=topic,
+            level=level,
+            duration_weeks=duration_weeks,
+            hours_per_day=hours_per_day,
+            language=language,
+            status="processing",
+        )
+        self.db.add(session)
+        await self.db.commit()
+        await self.db.refresh(session)
+        return session
+
+    async def get_sessions(self, user_id: UUID) -> list[LearningSession]:
+        result = await self.db.execute(
+            select(LearningSession)
+            .where(LearningSession.user_id == user_id)
+            .order_by(LearningSession.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def save_curriculum(self, session_id: UUID, curriculum_json: dict, version: int = 1) -> Curriculum:
+        from app.models.learning import Curriculum
+        curriculum = Curriculum(
+            session_id=session_id,
+            version=version,
+            curriculum_json=curriculum_json,
+        )
+        self.db.add(curriculum)
+        await self.db.commit()
+        await self.db.refresh(curriculum)
+        return curriculum
+
+    async def get_curriculum(self, session_id: UUID) -> Curriculum | None:
+        from app.models.learning import Curriculum
+        result = await self.db.execute(
+            select(Curriculum)
+            .where(Curriculum.session_id == session_id)
+            .order_by(Curriculum.version.desc())
+        )
+        return result.scalars().first()
+
+    async def save_topics(self, session_id: UUID, curriculum_id: UUID, weeks: list) -> list[Topic]:
+        topics = []
+        for week in weeks:
+            for day in week.get("days", []):
+                topic = Topic(
+                    id=day.get("topic_id"),
+                    session_id=session_id,
+                    curriculum_id=curriculum_id,
+                    title=day.get("title"),
+                    week_number=week.get("week"),
+                    day_number=day.get("day"),
+                    duration_minutes=day.get("duration_minutes"),
+                    status=day.get("status", "locked"),
+                    search_queries=day.get("search_queries"),
+                )
+                self.db.add(topic)
+                topics.append(topic)
+        await self.db.commit()
+        return topics
+
+    async def update_topic_status(self, topic_id: str, status: str) -> Topic | None:
+        topic = await self.get_topic(topic_id)
+        if topic:
+            topic.status = status
+            await self.db.commit()
+            await self.db.refresh(topic)
+        return topic
+
+    async def get_topics(self, session_id: UUID) -> list[Topic]:
+        result = await self.db.execute(
+            select(Topic)
+            .where(Topic.session_id == session_id)
+            .order_by(Topic.week_number, Topic.day_number)
+        )
+        return list(result.scalars().all())
+
+    async def save_module(self, topic_id: str, session_id: UUID, title: str, content_markdown: str, sources: list | None = None) -> LearningModule:
+        module = LearningModule(
+            topic_id=topic_id,
+            session_id=session_id,
+            title=title,
+            content_markdown=content_markdown,
+            sources=sources,
+        )
+        self.db.add(module)
+        await self.db.commit()
+        await self.db.refresh(module)
+        return module
+
+    async def get_agent_logs(self, session_id: UUID) -> list:
+        from app.models.agent import AgentLog
+        result = await self.db.execute(
+            select(AgentLog)
+            .where(AgentLog.session_id == session_id)
+            .order_by(AgentLog.created_at.asc())
+        )
+        return list(result.scalars().all())

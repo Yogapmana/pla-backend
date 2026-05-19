@@ -28,14 +28,29 @@ class Curriculum(BaseModel):
     total_weeks: int
     weeks: List[WeekSchedule]
 
+class CourseLink(BaseModel):
+    title: str
+    platform: str           # coursera | udemy | edx | fastai | freecodecamp
+    url: str
+    instructor: Optional[str] = None
+    rating: Optional[float] = None
+    duration: Optional[str] = None
+    price_type: str = "free"  # free | paid | audit
+    description: str = ""
+    relevant_section: str = ""  # bagian/week spesifik yang relevan dengan topik ini
+
 class RawContent(BaseModel):
-    source_type: str       # web | youtube | arxiv | wikipedia | pdf | article
+    source_type: str        # web | youtube | arxiv | semantic_scholar | wikipedia | pdf | course
     source_url: str
     source_title: str
-    raw_text: str
+    raw_text: str           # kosong jika embed_mode=False (sumber tipe course)
     topic_id: str
     relevance_score: float
     fetched_at: datetime
+    # field untuk resource link
+    embed_mode: bool = True             # True = masuk RAG Qdrant, False = hanya ditampilkan sebagai link
+    display_url: Optional[str] = None   # URL yang ditampilkan ke user di modul
+    course_metadata: Optional[CourseLink] = None  # hanya diisi jika source_type = course
 
 class LearningModule(BaseModel):
     topic_id: str

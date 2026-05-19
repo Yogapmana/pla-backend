@@ -55,3 +55,25 @@ class LearningModule(Base):
     word_count = Column(Integer, nullable=True)
     estimated_read_minutes = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class ResourceLink(Base):
+    __tablename__ = "resource_links"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    module_id = Column(UUID(as_uuid=True), ForeignKey("learning_modules.id", ondelete="CASCADE"), nullable=True)
+    topic_id = Column(String(100), ForeignKey("topics.id"), nullable=True)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("learning_sessions.id"), nullable=True)
+    link_type = Column(String(20), nullable=False)          # source | course | video | paper
+    title = Column(String(500), nullable=False)
+    url = Column(String, nullable=False)
+    platform = Column(String(100), nullable=True)           # coursera | udemy | edx | youtube | arxiv | fastai | freecodecamp
+    price_type = Column(String(20), nullable=True)          # free | paid | audit | open_access
+    rating = Column(Float, nullable=True)
+    duration = Column(String(100), nullable=True)
+    instructor = Column(String(200), nullable=True)
+    description = Column(String, nullable=True)
+    relevant_section = Column(String, nullable=True)        # section/week spesifik yang relevan
+    embed_mode = Column(String(10), default="true")         # TRUE = embed ke RAG, FALSE = link saja
+    click_count = Column(Integer, default=0)                # tracking engagement
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+

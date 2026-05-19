@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
     GROQ_API_KEY: str = Field(default="")
     TAVILY_API_KEY: str = Field(default="")
+    JINA_API_KEY: str = Field(default="")
 
     # Model Assignment
     ORCHESTRATOR_MODEL: str = Field(default="llama-3.3-70b-versatile")

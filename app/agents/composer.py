@@ -13,6 +13,8 @@ Tugas Anda adalah menyintesis berbagai bahan mentah dari internet menjadi Modul 
 Berikut adalah sumber materi yang dikumpulkan oleh Researcher Agent:
 {sources_text}
 
+{courses_text}
+
 Aturan Penulisan Modul Markdown:
 1. Mulai dengan Judul Topik (# [Judul Topik]).
 2. Buat bagian "## 🎯 Learning Objectives" (poin-poin apa yang akan dicapai).
@@ -20,7 +22,8 @@ Aturan Penulisan Modul Markdown:
 4. Buat bagian "## 💡 Contoh Konkret" (contoh kasus atau kode jika relevan).
 5. Buat bagian "## 🔁 Ringkasan" (tabel atau poin-poin kunci).
 6. Buat bagian "## 🧪 Latihan Mandiri" (1-2 soal refleksi singkat).
-7. Buat bagian "## 📚 Referensi Sumber" (cantumkan URL sumber yang digunakan dari data di atas).
+7. Buat bagian "## 🔗 Sumber yang Digunakan" (daftar sumber artikel, video, paper yang menjadi basis modul — beserta URL aslinya).
+8. Buat bagian "## 📚 Pelajari Lebih Dalam" (rekomendasi kursus eksternal dari data di atas. Untuk setiap kursus, sebutkan SPESIFIK section/week yang relevan dengan topik ini — bukan deskripsi kursus secara umum. Format: nama kursus, platform, link, dan section relevan).
 
 Tulis hanya konten Markdown tanpa tambahan kata-kata pembuka atau penutup dari Anda.
 """
@@ -60,12 +63,19 @@ def composer_node(state: PLAState) -> PLAState:
     )
     state["agent_logs"].append(log)
 
-    # Format sources
+    # Format sources — separate embeddable content from course links
     sources_text = ""
+    courses_text = ""
     for idx, r in enumerate(research_results):
-        # Limit text length to avoid token limit issues
-        content_snippet = r.raw_text[:2000] + "..." if len(r.raw_text) > 2000 else r.raw_text
-        sources_text += f"Sumber {idx+1} ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten: {content_snippet}\n\n"
+        if getattr(r, 'embed_mode', True) and r.raw_text:
+            content_snippet = r.raw_text[:2000] + "..." if len(r.raw_text) > 2000 else r.raw_text
+            sources_text += f"Sumber {idx+1} ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten: {content_snippet}\n\n"
+        elif not getattr(r, 'embed_mode', True) and getattr(r, 'course_metadata', None):
+            cm = r.course_metadata
+            courses_text += f"Kursus: {cm.title}\nPlatform: {cm.platform}\nURL: {cm.url}\nHarga: {cm.price_type}\nDeskripsi: {cm.description}\n\n"
+
+    if not courses_text:
+        courses_text = "(Tidak ada rekomendasi kursus yang ditemukan untuk topik ini.)"
 
     llm = get_llm(settings.COMPOSER_MODEL, temperature=0.3)
     
@@ -80,7 +90,8 @@ def composer_node(state: PLAState) -> PLAState:
         module_markdown = chain.invoke({
             "topic_title": topic_title,
             "level": config.level if config else "umum",
-            "sources_text": sources_text
+            "sources_text": sources_text,
+            "courses_text": courses_text,
         })
         
         module = LearningModule(

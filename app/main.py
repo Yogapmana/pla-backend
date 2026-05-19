@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, chat, quiz
+from app.api.v1 import auth, chat, quiz, progress, learning, metrics
+from app.api.v1.websocket import router as ws_router
 
 app = FastAPI(
     title="Personal Learning Agent API",
@@ -26,9 +27,24 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 # Quiz endpoints
 app.include_router(quiz.router, prefix="/api/v1/quiz", tags=["quiz"])
 
+# Progress & Feedback endpoints
+app.include_router(progress.router, prefix="/api/v1/progress", tags=["progress"])
+
+# Learning Session endpoints
+app.include_router(learning.router, prefix="/api/v1/learning", tags=["learning"])
+
+# Metrics endpoints (RAG evaluation + UX survey)
+app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["metrics"])
+
+# WebSocket endpoint for real-time agent log streaming
+app.include_router(ws_router, tags=["websocket"])
+
+# WebSocket endpoint for real-time agent log streaming
+app.include_router(ws_router, tags=["websocket"])
+
 @app.get("/")
 async def root():
-    return {"message": "Welcome to PLA API — Fase 2 (RAG Pipeline) Active"}
+    return {"message": "Welcome to PLA API — Multi-Agent RAG Learning Platform"}
 
 @app.get("/health")
 async def health():
