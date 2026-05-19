@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  # Database Utama (Port luarnya kita set 5433 biar ga nabrak Postgres native 5432)
+  postgres:
+    image: postgres:16-alpine
+    container_name: pla_postgres
+    environment:
+      - POSTGRES_USER=pla_user
+      - POSTGRES_PASSWORD=pla_password
+      - POSTGRES_DB=pla_db
+    ports:
+      - "5433:5432" 
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  # Vector Database (Aman, biasanya jarang ada yang pakai port 6333)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: pla_qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  # Cache & Broker (Port luarnya kita set 6380 biar ga nabrak Redis lama 6379)
+  redis:
+    image: redis:7-alpine
+    container_name: pla_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:

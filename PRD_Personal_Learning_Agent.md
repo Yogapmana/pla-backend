@@ -88,7 +88,8 @@ Sistem PLA menggunakan arsitektur 5 agent yang bekerja secara kolaboratif dan ot
 - Sistem autentikasi pengguna (register, login, profil)
 - Input learning goal dan konfigurasi awal (topik, durasi, level, jam/hari)
 - Pembuatan kurikulum dinamis oleh Planner Agent
-- Pencarian dan pengumpulan materi dari: web umum, YouTube (transcript), arXiv, Wikipedia, upload PDF/dokumen pengguna, artikel, dan buku
+- Pencarian dan pengumpulan materi dari: web umum (Tavily + Jina Reader), YouTube (transcript), arXiv, Semantic Scholar, Wikipedia, upload PDF/dokumen pengguna
+- Rekomendasi link kursus eksternal (Udemy, Coursera, edX, fast.ai, freeCodeCamp) sebagai kartu link di modul belajar — tanpa scraping konten berbayar
 - Sintesis materi menjadi modul belajar per sub-bab oleh Composer Agent
 - Kuis adaptif interaktif per topik
 - Chat berbasis Advanced RAG (HyDE + FlashRank re-ranking) per sesi belajar
@@ -267,35 +268,60 @@ call_composer → notify_ready → END
 **Input:** Daftar search query dari Planner  
 **Output:** `RawContent[]` — teks mentah beserta metadata sumber  
 
-**Tool set:**
+**Tool set — layered scraping strategy:**
 ```python
 tools = [
-    TavilySearchTool(),          # web umum
-    YoutubeTranscriptTool(),     # transcript YouTube
-    ArxivSearchTool(),           # paper akademik
-    WikipediaSearchTool(),       # Wikipedia
-    PDFLoaderTool(),             # dokumen upload pengguna
-    WebScraperTool(),            # artikel & buku online
+    TavilySearchTool(),             # discovery: cari URL relevan + snippet awal
+    JinaReaderTool(),               # full text extraction dari URL hasil Tavily
+    YoutubeTranscriptTool(),        # transcript YouTube (tanpa headless browser)
+    ArxivTool(),                    # arXiv API resmi — abstrak + metadata paper
+    SemanticScholarTool(),          # Semantic Scholar API — 100M+ paper akademik
+    WikipediaTool(),                # Wikipedia API — artikel penuh terstruktur
+    PyMuPDFTool(),                  # ekstraksi teks dari PDF upload pengguna
+    CourseDiscoveryTool(),          # metadata kursus Udemy/Coursera/edX — sebagai link rekomendasi
 ]
 ```
 
+> **Catatan arsitektur:** Tavily berperan sebagai *discovery layer* — menemukan URL relevan dan snippet awal. Jina Reader kemudian mengambil full text dari URL tersebut. Keduanya bekerja bersama, bukan saling menggantikan. Sumber akademik (arXiv, Semantic Scholar) dan non-web (YouTube, Wikipedia, PDF) menggunakan tool dedicated masing-masing karena Tavily tidak dapat mengaksesnya secara optimal.
+
 **Proses per topik:**
-1. Jalankan semua tools secara paralel menggunakan `asyncio.gather()`
-2. Filter konten: buang hasil dengan relevansi < threshold
-3. Deduplikasi konten yang mirip
-4. Kirim `RawContent[]` ke Composer
+1. Jalankan Tavily search untuk temukan URL relevan
+2. Jalankan Jina Reader secara paralel untuk ambil full text tiap URL (`asyncio.gather()`)
+3. Jalankan tool dedicated (YouTube, arXiv, Semantic Scholar, Wikipedia, PDF) secara paralel
+4. Filter konten: buang hasil dengan relevansi < threshold
+5. Deduplikasi konten yang mirip antar sumber
+6. Kirim `RawContent[]` ke Composer
+
+**Graceful degradation:** Jika Jina Reader gagal pada URL tertentu (situs strict/paywall), Researcher mencatat warning di agent log dan melanjutkan dengan sumber lain yang tersedia. Sistem tidak bergantung pada satu URL tunggal karena Tavily selalu mengembalikan 5–10 URL per query.
 
 **Metadata yang disimpan per sumber:**
 ```python
+class CourseLink(BaseModel):
+    title: str
+    platform: str           # coursera | udemy | edx | fastai | freecodecamp
+    url: str
+    instructor: str | None
+    rating: float | None
+    duration: str | None
+    price_type: str         # free | paid | audit
+    description: str
+    relevant_section: str   # bagian/week spesifik yang relevan dengan topik ini
+
 class RawContent(BaseModel):
-    source_type: str       # web | youtube | arxiv | wikipedia | pdf | article
+    source_type: str        # web | youtube | arxiv | semantic_scholar | wikipedia | pdf | course
     source_url: str
     source_title: str
-    raw_text: str
+    raw_text: str           # kosong jika embed_mode=False (sumber tipe course)
     topic_id: str
     relevance_score: float
     fetched_at: datetime
+    # field untuk resource link
+    embed_mode: bool = True             # True = masuk RAG Qdrant, False = hanya ditampilkan sebagai link
+    display_url: str | None = None      # URL yang ditampilkan ke user di modul
+    course_metadata: CourseLink | None = None  # hanya diisi jika source_type = course
 ```
+
+> **Pembagian mode konten:** Sumber bertipe `web`, `youtube`, `arxiv`, `semantic_scholar`, `wikipedia`, dan `pdf` menggunakan `embed_mode=True` — full text di-chunk dan di-embed ke Qdrant sebagai basis RAG. Sumber bertipe `course` (Udemy, Coursera, edX, dst.) menggunakan `embed_mode=False` — metadata kursus dikumpulkan tapi tidak di-embed, melainkan ditampilkan sebagai kartu rekomendasi link di UI modul.
 
 ### 5.4 Composer Agent
 
@@ -325,10 +351,15 @@ class RawContent(BaseModel):
 ## 🧪 Latihan Mandiri
 [1-2 soal refleksi sebelum kuis formal]
 
-## 📚 Referensi Sumber
-- [Sumber 1](url)
-- [Sumber 2](url)
+## 🔗 Sumber yang Digunakan
+[Daftar sumber yang menjadi dasar penulisan modul — artikel, video, paper — beserta URL aslinya]
+
+## 📚 Pelajari Lebih Dalam
+[Rekomendasi kursus eksternal: Udemy, Coursera, edX, fast.ai, freeCodeCamp, dst.
+Untuk setiap kursus, sebutkan SPESIFIK section/week yang relevan dengan topik ini — bukan deskripsi kursus secara umum]
 ```
+
+> **Catatan dua seksi terakhir:** Seksi `🔗 Sumber yang Digunakan` berisi sumber yang memang di-embed ke RAG — ditampilkan sebagai daftar dengan link yang bisa dibuka user. Seksi `📚 Pelajari Lebih Dalam` berisi rekomendasi kursus dari `CourseLink` yang dikurasi Researcher — kontennya tidak di-scrape, hanya metadata dan link yang ditampilkan agar user bisa mengakses platform kursus secara mandiri.
 
 **Proses chunking untuk RAG:**
 ```python
@@ -429,9 +460,14 @@ def calculate_mastery(signals: ProgressSignals) -> float:
 | Embedding model | nomic-embed-text v1.5 | via Ollama | 768 dimensi |
 | LLM backbone | Qwen3-32B / 14B / 8B | via Ollama | Heterogeneous assignment |
 | Re-ranking | FlashRank | ≥0.2 | Cross-encoder re-ranking |
-| Web search | Tavily Python SDK | latest | Researcher tool |
-| YouTube | youtube-transcript-api | latest | Transcript extraction |
-| PDF processing | PyMuPDF (fitz) | latest | PDF text extraction |
+| Web search & discovery | Tavily Python SDK | latest | Researcher: URL discovery + snippet |
+| Full text extraction | Jina Reader API | via httpx | Researcher: full text dari URL Tavily |
+| YouTube | youtube-transcript-api | latest | Transcript extraction tanpa headless browser |
+| arXiv paper | arxiv (pip) | latest | arXiv API resmi — abstrak + metadata |
+| Paper akademik | Semantic Scholar API | via httpx | 100M+ paper, gratis, tanpa API key |
+| Wikipedia | wikipedia (pip) | latest | Full article terstruktur via API resmi |
+| PDF processing | PyMuPDF (fitz) | latest | Ekstraksi teks PDF upload pengguna |
+| Course discovery | Tavily (site-scoped) | via Tavily SDK | Metadata kursus Udemy/Coursera/edX sebagai link rekomendasi |
 | RAG evaluation | RAGAS | ≥0.1 | faithfulness, relevancy, recall |
 | Auth | PyJWT + bcrypt | latest | JWT authentication |
 | Task queue | Celery + Redis | latest | Background agent tasks |
@@ -844,6 +880,27 @@ CREATE TABLE learning_modules (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Resource Links (sumber & rekomendasi kursus per modul)
+CREATE TABLE resource_links (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    module_id UUID REFERENCES learning_modules(id) ON DELETE CASCADE,
+    topic_id VARCHAR(100) REFERENCES topics(id),
+    session_id UUID REFERENCES learning_sessions(id),
+    link_type VARCHAR(20) NOT NULL,      -- source | course | video | paper
+    title VARCHAR(500) NOT NULL,
+    url TEXT NOT NULL,
+    platform VARCHAR(100),              -- coursera | udemy | edx | youtube | arxiv | fastai | freecodecamp
+    price_type VARCHAR(20),             -- free | paid | audit | open_access
+    rating FLOAT,
+    duration VARCHAR(100),
+    instructor VARCHAR(200),
+    description TEXT,
+    relevant_section TEXT,              -- section/week spesifik yang relevan dengan topik
+    embed_mode BOOLEAN DEFAULT TRUE,    -- TRUE = konten di-embed ke RAG, FALSE = hanya link rekomendasi
+    click_count INT DEFAULT 0,          -- tracking engagement — sinyal tambahan Feedback Engine
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Chat Messages
 CREATE TABLE chat_messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -961,7 +1018,7 @@ payload = {
     "day": int,
     "module_id": str,
     "chunk_index": int,
-    "source_type": str,   # web | youtube | arxiv | pdf | wikipedia
+    "source_type": str,   # web | youtube | arxiv | semantic_scholar | wikipedia | pdf | course
     "source_title": str,
     "source_url": str,
     "text": str,          # teks chunk asli
@@ -1078,10 +1135,13 @@ metrics = [
 
 ### FR-04: Modul Belajar
 - **FR-04.1** Setiap topik memiliki modul belajar yang disintesis Composer dari multi-sumber
-- **FR-04.2** Modul menampilkan learning objectives, penjelasan, contoh, ringkasan, latihan, dan referensi
+- **FR-04.2** Modul menampilkan learning objectives, penjelasan, contoh, ringkasan, latihan, sumber, dan rekomendasi kursus
 - **FR-04.3** Pengguna dapat memberi rating materi (paham / agak bingung / tidak paham)
 - **FR-04.4** Pengguna mengisi self-assessment confidence (slider 1–5) setelah selesai membaca
 - **FR-04.5** Sistem mencatat waktu baca otomatis di latar belakang
+- **FR-04.6** Setiap modul menampilkan seksi **"Sumber yang Digunakan"** berisi daftar artikel, video, dan paper yang menjadi basis modul — lengkap dengan link yang bisa dibuka user
+- **FR-04.7** Setiap modul menampilkan seksi **"Pelajari Lebih Dalam"** berisi kartu rekomendasi kursus eksternal (Udemy, Coursera, edX, fast.ai, freeCodeCamp, dst.) dengan informasi platform, harga, rating, dan section spesifik yang relevan
+- **FR-04.8** Setiap link rekomendasi kursus dapat dibuka di tab baru — sistem mencatat `click_count` per link sebagai sinyal engagement tambahan untuk Feedback Engine
 
 ### FR-05: Chat Tutor (RAG)
 - **FR-05.1** Pengguna dapat bertanya kepada Tutor Agent dalam konteks topik yang sedang dipelajari
@@ -1096,7 +1156,7 @@ metrics = [
 - **FR-06.4** Pengguna dapat mengulang kuis (attempt dicatat terpisah)
 
 ### FR-07: Adaptive Feedback Loop
-- **FR-07.1** Feedback Engine berjalan otomatis setiap user menekan tombol "Selesai Belajar" di akhir sesi belajar
+- **FR-07.1** Feedback Engine berjalan otomatis setiap akhir sesi belajar harian
 - **FR-07.2** Mastery score dihitung dari 5 sinyal dengan bobot masing-masing
 - **FR-07.3** Planner merevisi jadwal berdasarkan mastery score (4 level aksi)
 - **FR-07.4** Pengguna menerima notifikasi banner tentang perubahan jadwal
@@ -1121,8 +1181,8 @@ metrics = [
 
 | ID | Kategori | Requirement | Target |
 |----|----------|-------------|--------|
-| NFR-01 | Performa | Latency RAG response (P95) | < 10 detik |
-| NFR-02 | Performa | Waktu generate kurikulum awal | < 60 detik |
+| NFR-01 | Performa | Latency RAG response (P95) | < 5 detik |
+| NFR-02 | Performa | Waktu generate kurikulum awal | < 30 detik |
 | NFR-03 | Performa | Waktu Composer per topik | < 60 detik |
 | NFR-04 | Ketersediaan | Uptime sistem saat demo/evaluasi | > 99% |
 | NFR-05 | Keamanan | Semua endpoint dilindungi JWT | Wajib |
