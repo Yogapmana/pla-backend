@@ -21,6 +21,7 @@ class QuizSubmission(BaseModel):
     topic_id: str
     answers: list[QuizAnswer]
     time_spent_seconds: int | None = None
+    questions_data: list[dict] | None = None
 
 class QuizResultResponse(BaseModel):
     score: float

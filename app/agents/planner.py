@@ -21,8 +21,6 @@ Aturan:
 2. Tentukan jadwal belajar untuk setiap minggu dan hari (misal jika ada 5 hari belajar efektif seminggu, bagi materinya).
 3. Buatlah list `search_queries` yang relevan untuk setiap sub-topik agar Researcher Agent dapat mengumpulkan materi. Query sebaiknya dalam bahasa Inggris jika topik umum di IT/Science agar materi lebih kaya, tapi sesuaikan dengan konteks.
 4. Estimasi durasi dalam menit per topik harian (total durasi harian tidak boleh melebihi {hours_per_day} jam, atau 60 * {hours_per_day} menit).
-
-Keluarkan hasilnya HANYA dalam format JSON yang valid dan sesuai dengan schema yang ditentukan.
 """
 
 def planner_node(state: PLAState) -> PLAState:
@@ -104,8 +102,6 @@ Aturan Revisi berdasarkan Action:
 2. Jika "review": Pengguna cukup paham tapi perlu penguatan. Tambahkan satu sesi singkat untuk mereview topik ini sebelum lanjut ke topik berikutnya.
 3. Jika "continue": Pengguna paham. Tidak perlu revisi besar, mungkin hanya sedikit penyesuaian jika diperlukan.
 4. Jika "accelerate": Pengguna sangat paham. Anda boleh menghapus atau menggabungkan sub-topik pengantar di hari-hari berikutnya agar pengguna bisa belajar lebih cepat.
-
-Keluarkan SELURUH kurikulum yang telah direvisi (termasuk minggu/hari yang tidak diubah) HANYA dalam format JSON yang valid sesuai dengan schema.
 """
 
 def replan_node(state: PLAState) -> PLAState:

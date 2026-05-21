@@ -98,7 +98,7 @@ async def tutor_chat(
                 sources.append({
                     "title": title,
                     "type": c.get("source_type", "module"),
-                    "relevance": round(c.get("rerank_score", 0.0), 3),
+                    "relevance": float(round(c.get("rerank_score", 0.0), 3)),
                 })
                 seen.add(title)
 
@@ -146,10 +146,12 @@ FORMAT OUTPUT (JSON array):
   {{
     "question": "Pertanyaan?",
     "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
-    "correct_answer": "A",
+    "correct_answer": "A. ...",
     "explanation": "Penjelasan singkat mengapa jawaban ini benar."
   }}
 ]
+
+PENTING: correct_answer harus berupa TEKS LENGKAP dari opsi yang benar (bukan hanya hurufnya). Misalnya jika opsi A adalah "A. Multimedia adalah...", maka correct_answer harus "A. Multimedia adalah...".
 
 Hanya output JSON array, tanpa teks tambahan."""
 

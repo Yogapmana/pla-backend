@@ -243,4 +243,11 @@ async def complete_topic(
     topic = await service.update_topic_status(topic_id, "completed")
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
-    return {"status": "ok", "topic_id": topic_id, "new_status": topic.status}
+    next_topic = await service.activate_next_topic(session_id, topic_id)
+    return {
+        "status": "ok",
+        "topic_id": topic_id,
+        "new_status": topic.status,
+        "next_topic_id": next_topic.id if next_topic else None,
+        "next_topic_status": next_topic.status if next_topic else None,
+    }

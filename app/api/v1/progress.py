@@ -1,16 +1,19 @@
 import uuid
+from collections import Counter, defaultdict
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.database import get_db
-from app.models.agent import ProgressSignal as DBProgressSignal, MasteryScore as DBMasteryScore
-from app.models.learning import LearningSession as DBLearningSession
+from app.models.agent import ProgressSignal as DBProgressSignal, MasteryScore as DBMasteryScore, QuizResult as DBQuizResult
+from app.models.learning import LearningSession as DBLearningSession, Topic as DBTopic
 from app.agents.state import ProgressSignals, PLAState
 from app.agents.feedback_engine import run_feedback_loop
 from app.agents.planner import replan_node
+from app.schemas.progress import UserMetricsResponse
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 
 router = APIRouter()
 
@@ -27,6 +30,90 @@ class EvaluateResponse(BaseModel):
     mastery_score: float
     feedback_action: str
     message: str
+
+
+@router.get("/user-metrics/{session_id}", response_model=UserMetricsResponse)
+async def get_user_metrics(session_id: str, db: AsyncSession = Depends(get_db)):
+    session_uuid = uuid.UUID(session_id)
+
+    session_result = await db.execute(
+        select(DBLearningSession).where(DBLearningSession.id == session_uuid)
+    )
+    session = session_result.scalars().first()
+
+    topic_rows = []
+    quiz_rows = []
+    learning_rows = []
+
+    if session:
+        topic_result = await db.execute(
+            select(DBTopic).where(DBTopic.session_id == session_uuid)
+        )
+        topic_rows = topic_result.scalars().all()
+
+        quiz_result = await db.execute(
+            select(DBQuizResult).where(DBQuizResult.session_id == session_uuid)
+        )
+        quiz_rows = quiz_result.scalars().all()
+
+        learning_result = await db.execute(
+            select(DBLearningSession).where(DBLearningSession.user_id == session.user_id)
+        )
+        learning_rows = learning_result.scalars().all()
+
+    total_topics = len(topic_rows)
+    completed_topics = sum(1 for topic in topic_rows if topic.status == "completed")
+    status_counts = Counter(topic.status for topic in topic_rows)
+    completion_percentage = round((completed_topics / total_topics) * 100, 2) if total_topics else 0.0
+
+    quiz_scores = [quiz.score for quiz in quiz_rows if quiz.score is not None]
+    average_score = round(sum(quiz_scores) / len(quiz_scores), 2) if quiz_scores else 0.0
+
+    estimated_study_minutes = sum((topic.duration_minutes or 0) for topic in topic_rows)
+    estimated_study_hours = round(estimated_study_minutes / 60.0, 2)
+
+    activity_dates = set()
+    for learning_session in learning_rows:
+        active_at = learning_session.completed_at or learning_session.created_at
+        if active_at:
+            activity_dates.add(active_at.date())
+
+    streak_days = 0
+    if activity_dates:
+        cursor = max(activity_dates)
+        while cursor in activity_dates:
+            streak_days += 1
+            cursor = cursor - timedelta(days=1)
+
+    today = date.today()
+    weekly_counts = defaultdict(int)
+    for topic in topic_rows:
+        if topic.completed_at:
+            completed_date = topic.completed_at.date()
+            if today - timedelta(days=6) <= completed_date <= today:
+                weekly_counts[completed_date.isoformat()] += 1
+
+    weekly_progress = [
+        {"date": (today - timedelta(days=offset)).isoformat(), "completed": weekly_counts.get((today - timedelta(days=offset)).isoformat(), 0)}
+        for offset in range(6, -1, -1)
+    ]
+
+    return UserMetricsResponse(
+        session_id=session_id,
+        topic_progress={
+            "completed": completed_topics,
+            "total": total_topics,
+            "percentage": completion_percentage,
+            "by_status": dict(status_counts),
+        },
+        quiz_metrics={
+            "average_score": average_score,
+            "total_quizzes": len(quiz_rows),
+        },
+        streak_days=streak_days,
+        estimated_study_hours=estimated_study_hours,
+        weekly_progress=weekly_progress,
+    )
 
 @router.post("/signal")
 async def submit_progress_signals(data: SignalSubmit, db: AsyncSession = Depends(get_db)):

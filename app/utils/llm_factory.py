@@ -13,11 +13,12 @@ def get_llm(model_name: str, temperature: float = 0.2):
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
         "gemma2-9b-it",
-        "mixtral-8x7b-32768"
+        "mixtral-8x7b-32768",
+        "openai/gpt-oss-120b"
     ]
     
     # Check if the requested model is likely a Groq model
-    if model_name in groq_models or "llama-3" in model_name:
+    if model_name in groq_models or "llama-3" in model_name or model_name.startswith("openai/"):
         return ChatGroq(
             temperature=temperature,
             model_name=model_name,

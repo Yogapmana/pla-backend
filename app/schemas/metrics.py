@@ -16,6 +16,9 @@ class RAGMetricCreate(BaseModel):
     chunks_after_rerank: int | None = None
 
 
+RAGMetricsCreate = RAGMetricCreate  # Alias for backwards compat
+
+
 class RAGMetricResponse(BaseModel):
     id: str
     message_id: str | None

@@ -5,7 +5,7 @@ from app.rag.vector_store import get_qdrant_client, upsert_chunks
 
 logger = logging.getLogger(__name__)
 
-async def index_module(
+def index_module(
     user_id: str,
     session_id: str,
     topic_id: str,

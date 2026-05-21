@@ -8,6 +8,9 @@ celery_app = Celery(
     backend=settings.REDIS_URL,
     include=[
         "app.tasks.run_orchestrator",
+        "app.tasks.run_planner",
+        "app.tasks.run_researcher",
+        "app.tasks.run_composer",
     ],
 )
 

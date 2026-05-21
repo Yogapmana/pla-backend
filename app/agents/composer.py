@@ -114,8 +114,6 @@ def composer_node(state: PLAState) -> PLAState:
         )
         state["agent_logs"].append(success_log)
 
-        # --- Trigger RAG Indexing (fire-and-forget) ---
-        # Import here to avoid circular imports at module load time
         from app.rag.indexer import index_module
         user_id = state.get("user_id", "anonymous")
         session_id = str(state.get("session_id", ""))
@@ -128,48 +126,37 @@ def composer_node(state: PLAState) -> PLAState:
                     week_num, day_num = w_idx, d_idx
                     break
 
-        async def _run_indexing():
-            try:
-                count = await index_module(
-                    user_id=user_id,
-                    session_id=session_id,
-                    topic_id=target_topic_id,
-                    module_id=target_topic_id,
-                    title=topic_title,
-                    content_markdown=module_markdown,
-                    week=week_num,
-                    day=day_num,
-                    sources=module.sources,
-                )
-                state["agent_logs"].append(AgentLog(
-                    timestamp=datetime.utcnow(),
-                    agent="composer",
-                    level="info",
-                    message=f"Indexed {count} chunks into Qdrant for topic '{topic_title}'."
-                ))
-            except Exception as e:
-                state["agent_logs"].append(AgentLog(
-                    timestamp=datetime.utcnow(),
-                    agent="composer",
-                    level="warning",
-                    message=f"RAG indexing skipped (Qdrant/Ollama unavailable): {str(e)}"
-                ))
-
-        # Schedule indexing as a background task; don't block graph execution
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(_run_indexing())
-            else:
-                loop.run_until_complete(_run_indexing())
-        except RuntimeError:
-            pass  # No event loop — skip indexing in sync context
+            count = index_module(
+                user_id=user_id,
+                session_id=session_id,
+                topic_id=target_topic_id,
+                module_id=target_topic_id,
+                title=topic_title,
+                content_markdown=module_markdown,
+                week=week_num,
+                day=day_num,
+                sources=module.sources,
+            )
+            state["agent_logs"].append(AgentLog(
+                timestamp=datetime.utcnow(),
+                agent="composer",
+                level="info",
+                message=f"Indexed {count} chunks into Qdrant for topic '{topic_title}'."
+            ))
+        except Exception as e:
+            state["agent_logs"].append(AgentLog(
+                timestamp=datetime.utcnow(),
+                agent="composer",
+                level="warning",
+                message=f"RAG indexing skipped (Qdrant/Ollama unavailable): {str(e)}"
+            ))
         
         # Mark topic as completed or in_progress in curriculum (optional state mutation)
         for week in curriculum.weeks:
             for day in week.days:
                 if day.topic_id == target_topic_id:
-                    day.status = "in_progress" # Module is ready, user can start learning
+                    day.status = "active" # Module is ready, user can start learning
                     
     except Exception as e:
         error_log = AgentLog(

@@ -43,7 +43,6 @@ async def get_quiz(
 @router.post("/submit", response_model=QuizResultResponse)
 async def submit_quiz(
     submission: QuizSubmission,
-    questions_data: list[dict] | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -52,8 +51,7 @@ async def submit_quiz(
     Note: In production, questions should be retrieved from a cache/session
     using a quiz_id returned from GET /quiz/{topic_id}.
     """
-    # For now, re-generate to get correct answers (in production, use a cache)
-    quiz_data = await tutor_generate_quiz(
+    quiz_data = submission.questions_data if submission.questions_data else await tutor_generate_quiz(
         user_id=str(current_user.id),
         topic_id=submission.topic_id,
         topic_title=submission.topic_id.replace("_", " ").title(),

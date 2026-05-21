@@ -1,4 +1,5 @@
 from uuid import UUID
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.models.learning import LearningSession, Topic, LearningModule
@@ -131,9 +132,36 @@ class LearningService:
         topic = await self.get_topic(topic_id)
         if topic:
             topic.status = status
+            if status == "completed":
+                topic.completed_at = datetime.now(timezone.utc)
             await self.db.commit()
             await self.db.refresh(topic)
         return topic
+
+    async def activate_next_topic(self, session_id: UUID, completed_topic_id: str) -> Topic | None:
+        topics = await self.get_topics(session_id)
+        completed_topic = None
+        for topic in topics:
+            if topic.id == completed_topic_id:
+                completed_topic = topic
+                break
+        if not completed_topic:
+            return None
+        next_topic = None
+        for topic in topics:
+            if topic.week_number == completed_topic.week_number and topic.day_number == completed_topic.day_number + 1:
+                next_topic = topic
+                break
+        if not next_topic:
+            for topic in topics:
+                if topic.week_number == completed_topic.week_number + 1 and topic.day_number == 1:
+                    next_topic = topic
+                    break
+        if next_topic and next_topic.status == "locked":
+            next_topic.status = "active"
+            await self.db.commit()
+            await self.db.refresh(next_topic)
+        return next_topic
 
     async def get_topics(self, session_id: UUID) -> list[Topic]:
         result = await self.db.execute(

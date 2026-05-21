@@ -15,11 +15,14 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
     Saves curriculum, topics, and modules to DB after completion.
     """
     from app.db.database import async_sessionmaker, AsyncSession, engine
-    from app.models.learning import LearningSession, Curriculum, Topic, LearningModule
+    from app.models.learning import LearningSession, Curriculum, Topic, LearningModule, ResourceLink
     from app.models.agent import AgentLog as DBAgentLog
     from sqlalchemy import select
 
     async def _run():
+        # Clear any cached connection pool tied to a different or closed event loop
+        await engine.dispose()
+
         # Build initial state for LangGraph
         learning_config = LearningConfig(
             topic=config["topic"],
@@ -76,11 +79,15 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
                             search_queries=day.search_queries,
                         )
                         db.add(topic_rec)
+                await db.flush()
 
             # Save modules
+            topic_to_module_id = {}
             for module in final_state.get("modules", []):
+                mod_id = uuid.uuid4()
+                topic_to_module_id[module.topic_id] = mod_id
                 module_rec = LearningModule(
-                    id=uuid.uuid4(),
+                    id=mod_id,
                     topic_id=module.topic_id,
                     session_id=uuid.UUID(session_id),
                     title=module.title,
@@ -88,6 +95,67 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
                     sources=module.sources,
                 )
                 db.add(module_rec)
+            await db.flush()
+
+            # Save resource links (research results)
+            for res_content in final_state.get("research_results", []):
+                # Map link_type
+                link_type = "source"
+                if res_content.source_type == "course":
+                    link_type = "course"
+                elif res_content.source_type == "youtube":
+                    link_type = "video"
+                elif res_content.source_type in ("arxiv", "semantic_scholar"):
+                    link_type = "paper"
+                
+                # Map platform
+                platform = None
+                if res_content.source_type == "youtube":
+                    platform = "youtube"
+                elif res_content.source_type == "arxiv":
+                    platform = "arxiv"
+                elif res_content.source_type == "semantic_scholar":
+                    platform = "semantic_scholar"
+                
+                # Extract course metadata if course
+                price_type = None
+                rating = None
+                duration = None
+                instructor = None
+                description = None
+                relevant_section = None
+                
+                if res_content.source_type == "course" and res_content.course_metadata:
+                    cm = res_content.course_metadata
+                    platform = cm.platform
+                    price_type = cm.price_type
+                    rating = cm.rating
+                    duration = cm.duration
+                    instructor = cm.instructor
+                    description = cm.description
+                    relevant_section = cm.relevant_section
+                
+                module_id = topic_to_module_id.get(res_content.topic_id)
+                
+                link_rec = ResourceLink(
+                    id=uuid.uuid4(),
+                    module_id=module_id,
+                    topic_id=res_content.topic_id,
+                    session_id=uuid.UUID(session_id),
+                    link_type=link_type,
+                    title=res_content.source_title,
+                    url=res_content.source_url,
+                    platform=platform,
+                    price_type=price_type,
+                    rating=rating,
+                    duration=duration,
+                    instructor=instructor,
+                    description=description,
+                    relevant_section=relevant_section,
+                    embed_mode="true" if res_content.embed_mode else "false",
+                )
+                db.add(link_rec)
+            await db.flush()
 
             # Save agent logs
             for log in final_state.get("agent_logs", []):
@@ -111,6 +179,9 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
                 session.completed_at = datetime.utcnow()
 
             await db.commit()
+
+        # Release all pool connections associated with this event loop before it closes
+        await engine.dispose()
 
         return {
             "session_id": session_id,
