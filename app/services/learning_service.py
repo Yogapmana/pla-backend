@@ -139,28 +139,50 @@ class LearningService:
         return topic
 
     async def activate_next_topic(self, session_id: UUID, completed_topic_id: str) -> Topic | None:
+        import logging
+        logger = logging.getLogger(__name__)
+        
         topics = await self.get_topics(session_id)
+        logger.info(f"[ACTIVATE] Found {len(topics)} topics for session {session_id}")
+        
         completed_topic = None
         for topic in topics:
+            logger.info(f"[ACTIVATE] Topic: id={topic.id}, week={topic.week_number}, day={topic.day_number}, status={topic.status}")
             if topic.id == completed_topic_id:
                 completed_topic = topic
                 break
+        
         if not completed_topic:
+            logger.warning(f"[ACTIVATE] Completed topic {completed_topic_id} not found!")
             return None
+        
+        logger.info(f"[ACTIVATE] Found completed topic: {completed_topic.id} (week={completed_topic.week_number}, day={completed_topic.day_number})")
+        
         next_topic = None
         for topic in topics:
             if topic.week_number == completed_topic.week_number and topic.day_number == completed_topic.day_number + 1:
                 next_topic = topic
                 break
+        
         if not next_topic:
+            logger.info(f"[ACTIVATE] No next topic in same week, looking for next week...")
             for topic in topics:
                 if topic.week_number == completed_topic.week_number + 1 and topic.day_number == 1:
                     next_topic = topic
                     break
-        if next_topic and next_topic.status == "locked":
-            next_topic.status = "active"
-            await self.db.commit()
-            await self.db.refresh(next_topic)
+        
+        if next_topic:
+            logger.info(f"[ACTIVATE] Found next topic: {next_topic.id} (week={next_topic.week_number}, day={next_topic.day_number}, current_status={next_topic.status})")
+            if next_topic.status in ("locked", "pending"):
+                next_topic.status = "active"
+                await self.db.commit()
+                await self.db.refresh(next_topic)
+                logger.info(f"[ACTIVATE] Activated next topic: {next_topic.id}")
+            else:
+                logger.info(f"[ACTIVATE] Next topic {next_topic.id} already has status: {next_topic.status}")
+        else:
+            logger.warning(f"[ACTIVATE] No next topic found after {completed_topic_id}")
+        
         return next_topic
 
     async def get_topics(self, session_id: UUID) -> list[Topic]:

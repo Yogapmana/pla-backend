@@ -9,6 +9,7 @@ from app.models.user import User
 from app.models.learning import LearningSession, Topic, LearningModule
 from app.services.learning_service import LearningService
 from app.tasks.run_orchestrator import run_learning_pipeline
+from app.tasks.generate_module import generate_module_for_topic
 
 router = APIRouter()
 
@@ -235,19 +236,39 @@ async def complete_topic(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Mark a topic as completed."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"[COMPLETE] Marking topic {topic_id} as completed for session {session_id}")
+    
     service = LearningService(db)
     session = await service.get_session(session_id)
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Learning session not found")
+    
     topic = await service.update_topic_status(topic_id, "completed")
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
+    
+    logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
+    
     next_topic = await service.activate_next_topic(session_id, topic_id)
+    
+    if next_topic:
+        logger.info(f"[COMPLETE] Next topic found: {next_topic.id}, status: {next_topic.status}")
+        generate_module_for_topic.delay(
+            session_id=str(session_id),
+            user_id=str(current_user.id),
+            topic_id=next_topic.id,
+        )
+    else:
+        logger.warning(f"[COMPLETE] No next topic found after {topic_id}")
+    
     return {
         "status": "ok",
         "topic_id": topic_id,
         "new_status": topic.status,
         "next_topic_id": next_topic.id if next_topic else None,
         "next_topic_status": next_topic.status if next_topic else None,
+        "module_generating": next_topic.id if next_topic else None,
     }

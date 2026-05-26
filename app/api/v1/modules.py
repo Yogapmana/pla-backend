@@ -7,6 +7,7 @@ from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.services.learning_service import LearningService
+from app.tasks.generate_module import generate_module_for_topic
 
 router = APIRouter(prefix="/modules", tags=["modules"])
 
@@ -101,3 +102,45 @@ async def complete_module(
         "topic_id": topic_id,
         "new_status": topic.status,
     }
+
+
+class GenerateModuleResponse(BaseModel):
+    status: str
+    task_id: str | None = None
+    module_id: str | None = None
+
+
+@router.post("/{topic_id}/generate", response_model=GenerateModuleResponse)
+async def trigger_generate_module(
+    topic_id: str,
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = LearningService(db)
+    
+    session = await service.get_session(session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    topic = await service.get_topic(topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    
+    module = await service.get_module(topic_id)
+    if module:
+        return GenerateModuleResponse(
+            status="already_exists",
+            module_id=str(module.id),
+        )
+    
+    task = generate_module_for_topic.delay(
+        session_id=str(session_id),
+        user_id=str(current_user.id),
+        topic_id=topic_id,
+    )
+    
+    return GenerateModuleResponse(
+        status="generating",
+        task_id=task.id,
+    )
