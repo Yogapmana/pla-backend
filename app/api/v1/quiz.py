@@ -7,6 +7,7 @@ from app.models.user import User
 from app.models.agent import QuizResult
 from app.schemas.quiz import QuizResponse, QuizSubmission, QuizResultResponse, QuizQuestion
 from app.services.learning_service import LearningService
+from app.tasks.generate_module import generate_module_for_topic
 from app.agents.tutor import tutor_generate_quiz
 
 router = APIRouter()
@@ -15,6 +16,7 @@ router = APIRouter()
 async def get_quiz(
     topic_id: str,
     num_questions: int = 5,
+    time_limit_per_question: int = 60,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -33,10 +35,12 @@ async def get_quiz(
         )
 
     questions = [QuizQuestion(**q) for q in questions_data]
+    time_limit_seconds = time_limit_per_question * len(questions)
     return QuizResponse(
         topic_id=topic_id,
         questions=questions,
         total_questions=len(questions),
+        time_limit_seconds=time_limit_seconds,
     )
 
 
@@ -95,6 +99,15 @@ async def submit_quiz(
     db.add(quiz_result)
     await db.commit()
 
+    # Trigger next module generation if quiz score >= 80%
+    if percentage >= 80:
+        await trigger_next_module_after_quiz(
+            session_id=submission.session_id,
+            user_id=str(current_user.id),
+            topic_id=submission.topic_id,
+            db=db,
+        )
+
     # Generate feedback
     if percentage >= 80:
         feedback = "Luar biasa! Anda telah menguasai materi ini dengan sangat baik."
@@ -110,6 +123,28 @@ async def submit_quiz(
         percentage=percentage,
         feedback=feedback,
     )
+
+
+async def trigger_next_module_after_quiz(session_id: uuid.UUID, user_id: str, topic_id: str, db: AsyncSession):
+    """
+    After a quiz is submitted with score >= 80%, trigger module generation for the next topic.
+    This replaces the old flow where module was generated when topic was marked complete.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    service = LearningService(db)
+    next_topic = await service.activate_next_topic(session_id, topic_id)
+
+    if next_topic:
+        logger.info(f"[QUIZ >=80%] Triggering module generation for next topic: {next_topic.id}")
+        generate_module_for_topic.delay(
+            session_id=str(session_id),
+            user_id=user_id,
+            topic_id=next_topic.id,
+        )
+    else:
+        logger.info(f"[QUIZ >=80%] No next topic to generate module for after {topic_id}")
 
 
 @router.get("/history/{session_id}")

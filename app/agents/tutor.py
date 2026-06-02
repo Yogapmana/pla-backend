@@ -1,11 +1,12 @@
-import time
-import logging
 import asyncio
+import logging
+import time
 from datetime import datetime
+
 from app.agents.state import PLAState
+from app.config import settings
 from app.rag.retriever import retrieve_and_rerank
 from app.utils.llm_factory import get_llm
-from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ Gunakan konteks yang disediakan untuk menjawab pertanyaan secara akurat.
 Jawab dalam Bahasa Indonesia yang jelas dan mudah dipahami.
 Jika konteks tidak cukup, katakan dengan jujur bahwa kamu tidak memiliki informasi yang cukup.
 Selalu sertakan referensi sumber jika relevan."""
+
 
 def _build_context_block(chunks: list[dict]) -> str:
     """Format retrieved chunks into a readable context block."""
@@ -26,16 +28,18 @@ def _build_context_block(chunks: list[dict]) -> str:
         blocks.append(f"[Sumber {i}: {source}]\n{text}")
     return "\n\n---\n\n".join(blocks)
 
+
 def _format_chat_history(history: list[dict], max_turns: int = 5) -> str:
     """Format last N chat turns into a string for the prompt."""
     if not history:
         return ""
-    recent = history[-max_turns * 2:]  # user + assistant pairs
+    recent = history[-max_turns * 2 :]  # user + assistant pairs
     lines = []
     for msg in recent:
         role = "User" if msg.get("role") == "user" else "Tutor"
         lines.append(f"{role}: {msg.get('content', '')}")
     return "\n".join(lines)
+
 
 async def tutor_chat(
     user_id: str,
@@ -95,14 +99,18 @@ async def tutor_chat(
         for c in chunks:
             title = c.get("source_title", "")
             if title and title not in seen:
-                sources.append({
-                    "title": title,
-                    "type": c.get("source_type", "module"),
-                    "relevance": float(round(c.get("rerank_score", 0.0), 3)),
-                })
+                sources.append(
+                    {
+                        "title": title,
+                        "type": c.get("source_type", "module"),
+                        "relevance": float(round(c.get("rerank_score", 0.0), 3)),
+                    }
+                )
                 seen.add(title)
 
-    logger.info(f"[TUTOR] Response generated in {latency_ms}ms with {len(chunks)} context chunks.")
+    logger.info(
+        f"[TUTOR] Response generated in {latency_ms}ms with {len(chunks)} context chunks."
+    )
 
     return {
         "response": response_text,
@@ -123,7 +131,9 @@ async def tutor_generate_quiz(
     Quiz Generation Mode:
     Retrieves topic context from Qdrant and generates MCQ questions.
     """
-    logger.info(f"[TUTOR] Generating {num_questions} quiz questions for '{topic_title}'...")
+    logger.info(
+        f"[TUTOR] Generating {num_questions} quiz questions for '{topic_title}'..."
+    )
 
     # Get context from Qdrant
     chunks = retrieve_and_rerank(
@@ -136,22 +146,37 @@ async def tutor_generate_quiz(
     )
     context = _build_context_block(chunks)
 
-    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ) yang menguji pemahaman konsep.
+    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ), Benar/Salah.
 
 MATERI:
 {context}
+
+RATIO SOAL: ~80% MCQ, ~20% Benar/Salah
+- MCQ: 4 opsi (A, B, C, D)
+- True/False: satu pertanyaan dengan jawaban "Benar" atau "Salah"
 
 FORMAT OUTPUT (JSON array):
 [
   {{
     "question": "Pertanyaan?",
+    "question_type": "mcq",
     "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "A. ...",
     "explanation": "Penjelasan singkat mengapa jawaban ini benar."
+  }},
+  {{
+    "question": "Pernyataan tentang materi?",
+    "question_type": "true_false",
+    "options": ["Benar", "Salah"],
+    "correct_answer": "Benar",
+    "explanation": "Penjelasan mengapa jawaban ini benar."
   }}
 ]
 
-PENTING: correct_answer harus berupa TEKS LENGKAP dari opsi yang benar (bukan hanya hurufnya). Misalnya jika opsi A adalah "A. Multimedia adalah...", maka correct_answer harus "A. Multimedia adalah...".
+PENTING:
+- correct_answer untuk MCQ harus berupa TEKS LENGKAP dari opsi yang benar
+- correct_answer untuk True/False harus "Benar" atau "Salah"
+- question_type wajib diisi: "mcq", "true_false"
 
 Hanya output JSON array, tanpa teks tambahan."""
 
@@ -160,10 +185,11 @@ Hanya output JSON array, tanpa teks tambahan."""
 
     import json
     import re
+
     # Extract JSON from response
     raw = response.content.strip()
     # Try to find JSON array in the response
-    match = re.search(r'\[.*\]', raw, re.DOTALL)
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
     if match:
         try:
             return json.loads(match.group())

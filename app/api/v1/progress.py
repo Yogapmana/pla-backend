@@ -31,6 +31,11 @@ class EvaluateResponse(BaseModel):
     feedback_action: str
     message: str
 
+class TopicUnlockStatusResponse(BaseModel):
+    topic_id: str
+    unlocked: bool
+    latest_quiz_score: float | None = None
+
 
 @router.get("/user-metrics/{session_id}", response_model=UserMetricsResponse)
 async def get_user_metrics(session_id: str, db: AsyncSession = Depends(get_db)):
@@ -267,4 +272,32 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
         mastery_score=mastery_score,
         feedback_action=feedback_action.action,
         message=message
+    )
+
+@router.get("/topic-unlock/{session_id}/{topic_id}", response_model=TopicUnlockStatusResponse)
+async def get_topic_unlock_status(
+    session_id: str,
+    topic_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Cek apakah topik sudah unlocked berdasarkan nilai kuis minimum 80%.
+    """
+    session_uuid = uuid.UUID(session_id)
+
+    result = await db.execute(
+        select(DBQuizResult)
+        .where(DBQuizResult.session_id == session_uuid)
+        .where(DBQuizResult.topic_id == topic_id)
+        .order_by(DBQuizResult.created_at.desc())
+    )
+    latest_quiz = result.scalars().first()
+
+    latest_score = latest_quiz.score if latest_quiz else None
+    unlocked = latest_score is not None and (latest_score * 100) >= 80.0
+
+    return TopicUnlockStatusResponse(
+        topic_id=topic_id,
+        unlocked=unlocked,
+        latest_quiz_score=round(latest_score * 100, 1) if latest_score is not None else None,
     )

@@ -1,9 +1,11 @@
 from uuid import UUID
+from typing import Literal
 from pydantic import BaseModel
 
 class QuizQuestion(BaseModel):
     question: str
-    options: list[str]
+    question_type: Literal["mcq", "true_false", "essay"] = "mcq"
+    options: list[str] | None = None
     correct_answer: str
     explanation: str
 
@@ -11,6 +13,7 @@ class QuizResponse(BaseModel):
     topic_id: str
     questions: list[QuizQuestion]
     total_questions: int
+    time_limit_seconds: int | None = None
 
 class QuizAnswer(BaseModel):
     question_index: int

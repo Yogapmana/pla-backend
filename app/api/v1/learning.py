@@ -253,14 +253,11 @@ async def complete_topic(
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
     
     next_topic = await service.activate_next_topic(session_id, topic_id)
-    
+
     if next_topic:
         logger.info(f"[COMPLETE] Next topic found: {next_topic.id}, status: {next_topic.status}")
-        generate_module_for_topic.delay(
-            session_id=str(session_id),
-            user_id=str(current_user.id),
-            topic_id=next_topic.id,
-        )
+        # NOTE: Module generation for next topic is now triggered ONLY after quiz score >= 80%
+        # See POST /quiz/submit endpoint - it calls trigger_next_module_after_quiz() when score >= 80%
     else:
         logger.warning(f"[COMPLETE] No next topic found after {topic_id}")
     
