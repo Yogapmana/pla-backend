@@ -6,6 +6,7 @@ from app.tasks.celery_app import celery_app
 from app.db.database import AsyncSession, engine
 from app.services.learning_service import LearningService
 from app.models.learning import LearningModule as DBLearningModule
+from app.utils.log_broker import publish_log
 from app.agents.state import (
     PLAState, 
     LearningConfig, 
@@ -152,6 +153,16 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
             
             await db.commit()
             await db.refresh(module_rec)
+            
+            # Publish a final success log so WebSocket clients see completion
+            await publish_log(session_id, {
+                "type": "agent_log",
+                "timestamp": datetime.utcnow().isoformat(),
+                "agent": "composer",
+                "level": "info",
+                "message": f"Module '{generated_module.title}' ready for topic {topic_id}.",
+                "metadata": {"module_id": str(module_rec.id)},
+            })
             
             return {
                 "status": "success",

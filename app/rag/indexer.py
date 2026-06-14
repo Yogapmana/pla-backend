@@ -1,9 +1,12 @@
 import logging
+import fitz  # PyMuPDF
+from io import BytesIO
 from app.rag.chunker import chunk_markdown
 from app.rag.embedder import embed_texts
 from app.rag.vector_store import get_qdrant_client, upsert_chunks
 
 logger = logging.getLogger(__name__)
+
 
 def index_module(
     user_id: str,
@@ -53,4 +56,64 @@ def index_module(
         metadata=metadata,
     )
     logger.info(f"[INDEXER] Indexed {count} chunks into Qdrant for user {user_id}.")
+    return count
+
+
+def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
+    """Extract text from PDF, TXT, or MD files."""
+    text = ""
+    filename_lower = filename.lower()
+
+    if filename_lower.endswith(".pdf"):
+        # Use PyMuPDF to extract text
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+        for page in doc:
+            text += page.get_text("text") + "\n\n"
+        doc.close()
+    elif filename_lower.endswith((".txt", ".md")):
+        # Decode as utf-8
+        text = file_bytes.decode("utf-8", errors="ignore")
+    else:
+        raise ValueError(f"Unsupported file format: {filename}")
+
+    return text.strip()
+
+
+def index_uploaded_document(
+    user_id: str,
+    session_id: str,
+    topic_id: str,
+    filename: str,
+    raw_text: str,
+) -> int:
+    """
+    Index an uploaded user document into Qdrant.
+    """
+    logger.info(f"[INDEXER] Chunking uploaded document '{filename}'...")
+    chunks = chunk_markdown(raw_text)
+    if not chunks:
+        logger.warning(f"[INDEXER] No chunks produced for document '{filename}'. Skipping.")
+        return 0
+
+    logger.info(f"[INDEXER] Embedding {len(chunks)} chunks...")
+    embeddings = embed_texts(chunks)
+
+    metadata = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "topic_id": topic_id,
+        "source_type": "user_upload",
+        "source_title": filename,
+        "source_url": "",
+    }
+
+    client = get_qdrant_client()
+    count = upsert_chunks(
+        client=client,
+        user_id=user_id,
+        chunks=chunks,
+        embeddings=embeddings,
+        metadata=metadata,
+    )
+    logger.info(f"[INDEXER] Indexed {count} chunks of document '{filename}' into Qdrant for user {user_id}.")
     return count

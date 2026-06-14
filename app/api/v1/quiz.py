@@ -7,10 +7,16 @@ from app.models.user import User
 from app.models.agent import QuizResult
 from app.schemas.quiz import QuizResponse, QuizSubmission, QuizResultResponse, QuizQuestion
 from app.services.learning_service import LearningService
+from app.services.quiz_cache import (
+    store_quiz,
+    consume_quiz,
+    get_quiz as get_cached_quiz,
+)
 from app.tasks.generate_module import generate_module_for_topic
 from app.agents.tutor import tutor_generate_quiz
 
 router = APIRouter()
+
 
 @router.get("/{topic_id}", response_model=QuizResponse)
 async def get_quiz(
@@ -20,7 +26,13 @@ async def get_quiz(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate or retrieve quiz questions for a topic."""
+    """
+    Generate MCQ quiz for a topic and cache it in Redis (30 min TTL).
+
+    Returns a quiz_id alongside the questions; clients must send the
+    quiz_id back on submit so we can grade against the exact same
+    questions (replay-safe, token-efficient).
+    """
     questions_data = await tutor_generate_quiz(
         user_id=str(current_user.id),
         topic_id=topic_id,
@@ -31,12 +43,20 @@ async def get_quiz(
     if not questions_data:
         raise HTTPException(
             status_code=404,
-            detail="Could not generate quiz. Make sure the topic has been indexed first."
+            detail="Could not generate quiz. Make sure the topic has been indexed first.",
         )
+
+    # Cache the questions and obtain a stable quiz_id
+    quiz_id = await store_quiz(
+        user_id=str(current_user.id),
+        topic_id=topic_id,
+        questions=questions_data,
+    )
 
     questions = [QuizQuestion(**q) for q in questions_data]
     time_limit_seconds = time_limit_per_question * len(questions)
     return QuizResponse(
+        quiz_id=quiz_id,
         topic_id=topic_id,
         questions=questions,
         total_questions=len(questions),
@@ -52,15 +72,60 @@ async def submit_quiz(
 ):
     """
     Submit quiz answers and calculate score.
-    Note: In production, questions should be retrieved from a cache/session
-    using a quiz_id returned from GET /quiz/{topic_id}.
+
+    Grading source priority:
+    1. The Redis cache (looked up by quiz_id, then by (user, topic)).
+    2. submission.questions_data (back-compat for clients that send it).
+    3. Fall back to re-generating via LLM (logged as a warning — only
+       happens if the cache expired or the client is missing quiz_id).
     """
-    quiz_data = submission.questions_data if submission.questions_data else await tutor_generate_quiz(
-        user_id=str(current_user.id),
-        topic_id=submission.topic_id,
-        topic_title=submission.topic_id.replace("_", " ").title(),
-        num_questions=len(submission.answers),
-    )
+    quiz_data: list[dict] | None = None
+    graded_quiz_id: str | None = None
+    cache_hit = False
+
+    # 1. Try the Redis cache first
+    if submission.quiz_id:
+        cached = await consume_quiz(
+            user_id=str(current_user.id),
+            topic_id=submission.topic_id,
+            quiz_id=submission.quiz_id,
+        )
+        if cached:
+            quiz_data = cached.get("questions")
+            graded_quiz_id = cached.get("quiz_id")
+            cache_hit = True
+
+    if quiz_data is None:
+        # 2. Side-index fallback (quiz_id absent but quiz still in cache)
+        cached = await get_cached_quiz(
+            user_id=str(current_user.id), topic_id=submission.topic_id
+        )
+        if cached:
+            quiz_data = cached.get("questions")
+            graded_quiz_id = cached.get("quiz_id")
+            cache_hit = True
+
+    if quiz_data is None and submission.questions_data:
+        # 3a. Legacy fallback — client sent questions_data
+        quiz_data = submission.questions_data
+
+    if quiz_data is None:
+        # 3b. No quiz found in cache AND no questions_data sent.
+        # We intentionally do NOT re-generate via LLM anymore — that
+        # path was token-expensive and produced inconsistent scores
+        # (LLM non-determinism). The client should always include
+        # quiz_id (which the frontend does) or questions_data.
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(
+            f"[QUIZ_SUBMIT] No cached quiz for user={current_user.id} "
+            f"topic={submission.topic_id} quiz_id={submission.quiz_id}. "
+            f"Client may be reusing expired or reloaded page."
+        )
+        raise HTTPException(
+            status_code=410,
+            detail="Quiz sudah kedaluwarsa. Silakan mulai kuis baru.",
+        )
 
     if not quiz_data:
         raise HTTPException(status_code=400, detail="Quiz data not available")

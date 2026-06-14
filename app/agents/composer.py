@@ -11,7 +11,7 @@ COMPOSER_PROMPT = """
 Anda adalah seorang Educator ahli di sistem Personal Learning Agent.
 Tugas Anda adalah menulis sebuah Modul Belajar Markdown tentang topik: {topic_title}.
 
-Modul ini HARUS ditulis dengan gaya penulisan artikel edukatif yang rapi, mengalir, dan langsung pada intinya (seperti artikel blog teknologi). Setiap penjelasan konsep wajib disertai dengan ilustrasi visual agar pembaca mudah memahami materi.
+Modul ini HARUS ditulis dengan gaya penulisan yang rapi, mengalir, dan mudah dipahami, layaknya artikel edukatif atau buku teks modern.
 
 Gunakan sumber materi berikut sebagai basis informasi Anda:
 {sources_text}
@@ -21,30 +21,20 @@ Rekomendasi Kursus Terkait:
 
 ATURAN PENULISAN DAN STRUKTUR MODUL:
 
-1. Pendahuluan
-   Tulis 2-3 paragraf pengantar yang menjelaskan gambaran umum topik ini dan mengapa hal ini penting dalam penerapannya sehari-hari atau di industri.
+- Buatlah modul yang komprehensif, mendalam, dan terstruktur secara natural sesuai dengan kelengkapan materi aktual.
+- Gunakan hierarki header Markdown (`#`, `##`, `###`) yang logis dan sesuai dengan pembagian sub-topik materi dari sumber.
+- Jelaskan konsep inti secara mendetail dan tuntas. Gunakan paragraf, daftar (bullet points), atau blok kutipan secara luwes.
+- JIKA ada data komparatif, spesifikasi, atau ringkasan teknis, amat disarankan membuat **tabel Markdown** agar lebih terstruktur.
+- Berikan contoh nyata atau studi kasus jika informasi tersebut tersedia di dalam teks referensi.
+- WAJIB gunakan **sitasi inline** mengacu pada sumber materi (contoh: "... menurut penelitian terbaru [1]."). Cocokkan nomor urut dengan referensi di akhir.
+- Di bagian PALING AKHIR modul, wajib buat dua bagian:
+  1. "## Referensi": Daftar sumber materi yang digunakan sesuai sitasi inline (Format: `[1] [Judul](URL)`).
+  2. "## Pelajari Lebih Dalam": Daftar kursus terkait (Format: `* **[Nama Kursus](URL)** - Platform`). Jika tidak ada, tulis "(Tidak ada kursus eksternal yang direkomendasikan)".
 
-2. Pembahasan Konsep Utama (Alur: Teks -> Gambar -> Teks)
-   Pecah materi utama menjadi beberapa sub-topik (gunakan ## atau ###).
-   Untuk SETIAP sub-topik materi, WAJIB ikuti struktur berurutan ini:
-   - Paragraf 1: Penjelasan dasar/definisi dari sub-topik tersebut.
-   - GAMBAR ILUSTRASI: Sisipkan 1 gambar menggunakan format Markdown berikut:
-     `![Deskripsi Gambar](https://gen.pollinations.ai/image/{{keyword}}?model={image_model}&width={image_width}&height={image_height}&key={api_key})`
-     ATURAN KETAT GAMBAR:
-     - Ganti `{{keyword}}` dengan kata kunci BAHASA INGGRIS yang SPESIFIK dan RELEVAN dengan sub-topik.
-     - DILARANG KERAS menggunakan spasi - GANTI DENGAN GARIS BAWAH (_).
-     - Contoh benar: `product_roadmap_strategy`, `ai_machine_learning_diagram`
-     - Contoh salah: `product roadmap`, `ai machine learning`
-   - Paragraf 2 dst: Lanjutkan dengan penjelasan lebih dalam, seperti jenis algoritma/cara kerja/contoh penerapannya.
-
-3. Kesimpulan
-   Tutup dengan paragraf kesimpulan ringkas yang menyimpulkan seluruh materi di atas.
-
-4. Referensi & Pembelajaran Lanjutan
-   - Tulis "## Referensi" dan buat daftar bullet point dari sumber materi di atas (Format: `* [Judul](URL)`).
-   - Tulis "## Pelajari Lebih Dalam" dan buat daftar kursus dari data di atas (Format: `* **[Nama Kursus](URL)** - Platform`). Jika tidak ada, tulis "(Tidak ada kursus eksternal yang direkomendasikan)".
-
-PENTING: Keluarkan HANYA teks Markdown murni. Dilarang keras menambahkan kalimat basa-basi di awal (seperti "Berikut adalah modulnya...") atau di akhir. Sesuaikan kedalaman materi untuk level: {level}.
+PENTING:
+- Tulis SELURUH ISI MODUL dalam **Bahasa Indonesia** yang baik dan benar (meskipun sumber teks berbahasa Inggris).
+- Keluarkan HANYA teks Markdown murni tanpa basa-basi (jangan gunakan kalimat "Berikut adalah...").
+- Sesuaikan tingkat kedalaman materi untuk level: {level}.
 """
 
 
@@ -86,12 +76,22 @@ def composer_node(state: PLAState) -> PLAState:
     # Format sources — separate embeddable content from course links
     sources_text = ""
     courses_text = ""
+    max_total_chars = 25000  # Groq API total payload body limit prevention
+    current_chars = 0
+
     for idx, r in enumerate(research_results):
         if getattr(r, "embed_mode", True) and r.raw_text:
-            content_snippet = (
-                r.raw_text[:2000] + "..." if len(r.raw_text) > 2000 else r.raw_text
-            )
-            sources_text += f"Sumber {idx + 1} ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten: {content_snippet}\n\n"
+            if current_chars >= max_total_chars:
+                # If we've hit the strict limit, only add metadata, no full text
+                sources_text += f"Sumber [{idx + 1}] ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten: (Konteks dipotong karena batas ukuran)\n\n"
+                continue
+                
+            remaining_chars = max_total_chars - current_chars
+            text_to_use = r.raw_text[:remaining_chars] + "..." if len(r.raw_text) > remaining_chars else r.raw_text
+            
+            added_text = f"Sumber [{idx + 1}] ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten:\n{text_to_use}\n\n"
+            sources_text += added_text
+            current_chars += len(added_text)
         elif not getattr(r, "embed_mode", True) and getattr(r, "course_metadata", None):
             cm = r.course_metadata
             courses_text += f"Kursus: {cm.title}\nPlatform: {cm.platform}\nURL: {cm.url}\nHarga: {cm.price_type}\nDeskripsi: {cm.description}\n\n"

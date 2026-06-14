@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.database import get_db
-from app.models.agent import ProgressSignal as DBProgressSignal, MasteryScore as DBMasteryScore, QuizResult as DBQuizResult
+from app.models.agent import ProgressSignal as DBProgressSignal, QuizResult as DBQuizResult
 from app.models.learning import LearningSession as DBLearningSession, Topic as DBTopic
 from app.agents.state import ProgressSignals, PLAState
 from app.agents.feedback_engine import run_feedback_loop
@@ -201,20 +201,18 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
     # Jalankan feedback loop murni (tanpa LLM)
     mastery_score, feedback_action = run_feedback_loop(state_signals, topic_id)
     
-    # Simpan ke DB
-    db_mastery = DBMasteryScore(
-        id=uuid.uuid4(),
-        session_id=uuid.UUID(session_id),
-        topic_id=topic_id,
-        mastery_score=mastery_score,
-        quiz_score=state_signals.quiz_score,
-        reading_time_ratio=state_signals.reading_time_ratio,
-        question_frequency_score=state_signals.question_frequency,
-        self_assessment_score=state_signals.self_assessment,
-        material_rating_score=state_signals.material_rating,
-        feedback_action=feedback_action.action
-    )
-    db.add(db_mastery)
+    # Simpan ke DB (Update Topic)
+    topic_result = await db.execute(select(DBTopic).where(DBTopic.id == topic_id))
+    db_topic = topic_result.scalars().first()
+    
+    if db_topic:
+        db_topic.mastery_score = mastery_score
+        db_topic.quiz_score = state_signals.quiz_score
+        db_topic.reading_time_ratio = state_signals.reading_time_ratio
+        db_topic.question_frequency_score = state_signals.question_frequency
+        db_topic.self_assessment_score = state_signals.self_assessment
+        db_topic.material_rating_score = state_signals.material_rating
+        db_topic.feedback_action = feedback_action.action
     
     # Lakukan Replanning jika ada kurikulum
     message = "Mastery evaluated. No replanning performed (no existing curriculum)."

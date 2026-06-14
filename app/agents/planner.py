@@ -62,6 +62,13 @@ def planner_node(state: PLAState) -> PLAState:
         if not curriculum.curriculum_id or curriculum.curriculum_id == "uuid":
             curriculum.curriculum_id = str(uuid.uuid4())
             
+        # Make topic_ids globally unique to avoid Postgres PK collisions
+        short_session = str(state["session_id"]).split("-")[0]
+        for week in curriculum.weeks:
+            for day in week.days:
+                if short_session not in day.topic_id:
+                    day.topic_id = f"{short_session}-{day.topic_id}"
+            
         state["curriculum"] = curriculum
         
         success_log = AgentLog(
@@ -148,6 +155,14 @@ def replan_node(state: PLAState) -> PLAState:
         
         # Pertahankan ID kurikulum asli
         revised_curriculum.curriculum_id = current_curriculum.curriculum_id
+        
+        # Make topic_ids globally unique to avoid Postgres PK collisions
+        short_session = str(state["session_id"]).split("-")[0]
+        for week in revised_curriculum.weeks:
+            for day in week.days:
+                if short_session not in day.topic_id:
+                    day.topic_id = f"{short_session}-{day.topic_id}"
+                    
         state["curriculum"] = revised_curriculum
         
         success_log = AgentLog(

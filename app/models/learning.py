@@ -41,6 +41,13 @@ class Topic(Base):
     scheduled_date = Column(Date, nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     search_queries = Column(JSONB, nullable=True)
+    mastery_score = Column(Float, nullable=True)
+    quiz_score = Column(Float, nullable=True)
+    reading_time_ratio = Column(Float, nullable=True)
+    question_frequency_score = Column(Float, nullable=True)
+    self_assessment_score = Column(Float, nullable=True)
+    material_rating_score = Column(Float, nullable=True)
+    feedback_action = Column(String(100), nullable=True)
 
 class LearningModule(Base):
     __tablename__ = "learning_modules"

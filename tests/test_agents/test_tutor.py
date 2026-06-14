@@ -13,7 +13,7 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-async def test_tutor_chat():
+async def tutor_chat_test():
     print("=" * 60)
     print("TEST: Tutor Agent — Chat RAG Mode")
     print("=" * 60)
@@ -103,4 +103,4 @@ else:
     print("=" * 60)
 
 if __name__ == "__main__":
-    asyncio.run(test_tutor_chat())
+    asyncio.run(tutor_chat_test())

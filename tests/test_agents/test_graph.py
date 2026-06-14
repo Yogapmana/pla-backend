@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from app.agents.orchestrator import pla_graph
+from app.agents.orchestrator import build_pla_graph
 from app.agents.state import LearningConfig
 
 async def main():
@@ -31,7 +31,8 @@ async def main():
     
     print("Starting LangGraph execution...")
     # Because researcher is async and invokes async tools, we use ainvoke
-    final_state = await pla_graph.ainvoke(initial_state)
+    graph = build_pla_graph().compile()
+    final_state = await graph.ainvoke(initial_state)
     
     print("\n" + "="*50)
     print("EXECUTION COMPLETED")

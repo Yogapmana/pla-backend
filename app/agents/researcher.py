@@ -24,11 +24,15 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
     """
     raw_contents: List[RawContent] = []
 
-    # --- Layer 1: Tavily discovery + Wikipedia + Arxiv + Semantic Scholar (parallel) ---
+    # --- Layer 1: Tavily + Wikipedia + Arxiv + YouTube discovery (parallel) ---
+    # YouTube discovery: ask Tavily for "best YouTube video URL for {query}",
+    # then fetch the transcript of the top result. Enriches the multi-source mix.
+    discovery_query = f"best youtube video tutorial explaining {query}"
     tasks = [
         tavily_search_tool.ainvoke({"query": query}),
         wikipedia_search_tool.ainvoke({"query": query}),
         arxiv_search_tool.ainvoke({"query": query}),
+        tavily_search_tool.ainvoke({"query": discovery_query}),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -70,17 +74,61 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
     except Exception as e:
         logger.warning(f"[RESEARCHER] Semantic Scholar error: {e}")
 
+    # --- Layer 1c: YouTube transcript (from the discovery query above) ---
+    # The 4th task in `tasks` is the YouTube discovery Tavily call.
+    # We extract the first YouTube URL and fetch its transcript.
+    try:
+        yt_discovery = results[3] if len(results) > 3 and not isinstance(results[3], Exception) else []
+        yt_urls = [
+            item.get("source_url", "")
+            for item in (yt_discovery or [])
+            if "youtube.com" in item.get("source_url", "") or "youtu.be" in item.get("source_url", "")
+        ]
+        if yt_urls:
+            # The tool is sync; wrap with to_thread to avoid blocking the loop
+            yt_result = await asyncio.to_thread(youtube_transcript_tool.invoke, {"video_url": yt_urls[0]})
+            for yt in yt_result:
+                if yt.get("raw_text"):
+                    raw_contents.append(RawContent(
+                        source_type=yt["source_type"],
+                        source_title=yt["source_title"],
+                        source_url=yt["source_url"],
+                        raw_text=yt["raw_text"][:8000],  # cap at 8k chars
+                        topic_id=topic_id,
+                        relevance_score=yt.get("relevance_score", 0.65),
+                        fetched_at=datetime.utcnow(),
+                        display_url=yt["source_url"],
+                    ))
+                    logger.info(f"[RESEARCHER] YouTube transcript: {yt_urls[0][:60]}... ({len(yt['raw_text'])} chars)")
+    except Exception as e:
+        logger.warning(f"[RESEARCHER] YouTube transcript error (graceful skip): {e}")
+
+    def is_valid_content(text: str) -> bool:
+        if len(text) < 500:
+            return False
+        lower_text = text.lower()
+        bad_phrases = [
+            "enable javascript", "please accept cookies", "access denied", 
+            "captcha", "are you a robot", "security check", "turn on javascript",
+            "checking your browser before accessing", "cloudflare"
+        ]
+        matches = sum(1 for p in bad_phrases if p in lower_text)
+        if matches >= 2:
+            return False
+        return True
+
     # --- Layer 2: Jina Reader — full text from Tavily-discovered URLs ---
     tavily_urls = [item["source_url"] for item in tavily_results if item.get("source_url")]
     if tavily_urls:
         try:
             jina_results = await jina_read_urls(tavily_urls[:5], timeout=20)
             for jina_res in jina_results:
-                if jina_res.get("success") and len(jina_res.get("text", "")) > 200:
+                raw_text = jina_res.get("text", "")
+                if jina_res.get("success") and is_valid_content(raw_text):
                     # Replace the Tavily snippet with full Jina text for matching URL
                     for rc in raw_contents:
                         if rc.source_url == jina_res["url"] and rc.source_type == "web":
-                            rc.raw_text = jina_res["text"]
+                            rc.raw_text = raw_text
                             logger.info(f"[RESEARCHER] Jina enriched: {jina_res['url'][:60]}... ({jina_res['char_count']} chars)")
                             break
         except Exception as e:
@@ -153,8 +201,14 @@ async def researcher_node(state: PLAState) -> PLAState:
 
     all_raw_content = []
 
-    # Run all queries in parallel
-    query_tasks = [run_tools_for_query(q, target_topic.topic_id) for q in queries]
+    # Run all queries in parallel with a max concurrency of 3
+    sem = asyncio.Semaphore(3)
+    
+    async def sem_run(q):
+        async with sem:
+            return await run_tools_for_query(q, target_topic.topic_id)
+            
+    query_tasks = [sem_run(q) for q in queries]
     query_results = await asyncio.gather(*query_tasks)
 
     for contents in query_results:

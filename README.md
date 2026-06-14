@@ -83,23 +83,15 @@ Advanced retrieval using **HyDE (Hypothetical Document Embedding)** + **FlashRan
 ### Quiz
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/quiz/{topic_id}` | Generate MCQ quiz |
+| GET  | `/api/v1/quiz/{topic_id}` | Generate MCQ quiz |
 | POST | `/api/v1/quiz/submit` | Submit answers, returns score + feedback |
-| GET | `/api/v1/quiz/history/{session_id}` | Quiz attempt history |
+| GET  | `/api/v1/quiz/history/{session_id}` | Quiz attempt history |
 
 ### Progress & Feedback
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/v1/progress/signal` | Submit progress signals |
 | POST | `/api/v1/progress/evaluate` | Trigger feedback engine → recalculate mastery |
-
-### Metrics
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/v1/metrics/rag` | Record RAG evaluation metrics |
-| GET | `/api/v1/metrics/rag/{session_id}` | RAG metrics for session |
-| POST | `/api/v1/metrics/ux` | Submit UX survey |
-| GET | `/api/v1/metrics/ux/{session_id}` | UX surveys for session |
 
 ### WebSocket
 | Endpoint | Description |
@@ -171,7 +163,6 @@ pla-backend/
 │   │   ├── chat.py                # RAG chat endpoints
 │   │   ├── quiz.py                # Quiz endpoints
 │   │   ├── progress.py            # Progress signals + feedback
-│   │   ├── metrics.py             # RAG + UX metrics
 │   │   └── websocket.py           # Real-time agent log streaming
 │   ├── agents/
 │   │   ├── orchestrator.py       # LangGraph StateGraph builder

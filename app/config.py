@@ -12,6 +12,16 @@ class Settings(BaseSettings):
     QDRANT_URL: str = Field(default="http://localhost:6333")
     REDIS_URL: str = Field(default="redis://localhost:6380/0")
 
+    # CORS — comma-separated list of allowed origins.
+    # Set in .env as: CORS_ORIGINS=http://localhost:5173,https://pla.example.com
+    CORS_ORIGINS: str = Field(
+        default="http://localhost:3000,http://localhost:5173,http://localhost:5174"
+    )
+
+    def cors_origins_list(self) -> list[str]:
+        """Parse CORS_ORIGINS into a list of allowed origin strings."""
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
     # LLM Providers
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
     GROQ_API_KEY: str = Field(default="")

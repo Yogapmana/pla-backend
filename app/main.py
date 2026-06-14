@@ -1,19 +1,33 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, chat, quiz, progress, learning, metrics
+from app.api.v1 import auth, chat, quiz, progress, learning
 from app.api.v1.websocket import router as ws_router
 from app.api.v1 import curriculum, modules
+
+from contextlib import asynccontextmanager
+from redis import asyncio as aioredis
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.redis import RedisBackend
+from app.config import settings
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    redis = aioredis.from_url(settings.REDIS_URL, encoding="utf8", decode_responses=True)
+    FastAPICache.init(RedisBackend(redis), prefix="pla-cache")
+    yield
 
 app = FastAPI(
     title="Personal Learning Agent API",
     description="Backend API for PLA System — Multi-Agent RAG Learning Platform",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
-# CORS configuration
+# CORS configuration — read allowed origins from settings (env-driven).
+# In dev, defaults to localhost:3000/5173/5174. Set CORS_ORIGINS in .env for prod.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to frontend domain
+    allow_origins=settings.cors_origins_list(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,14 +54,11 @@ app.include_router(curriculum.router, prefix="/api/v1", tags=["curriculum"])
 # Modules endpoint
 app.include_router(modules.router, prefix="/api/v1", tags=["modules"])
 
-# Metrics endpoints (RAG evaluation + UX survey)
-app.include_router(metrics.router, prefix="/api/v1/metrics", tags=["metrics"])
 
 # WebSocket endpoint for real-time agent log streaming
 app.include_router(ws_router, tags=["websocket"])
 
-# WebSocket endpoint for real-time agent log streaming
-app.include_router(ws_router, tags=["websocket"])
+
 
 @app.get("/")
 async def root():

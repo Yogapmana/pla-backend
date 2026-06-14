@@ -51,7 +51,7 @@ print("Hello, World!")
 2. Hitung luas lingkaran dengan jari-jari 7 menggunakan Python.
 """
 
-async def test_indexing():
+async def indexing_test():
     print("=" * 60)
     print("TEST: RAG Indexing Pipeline")
     print("=" * 60)
@@ -123,4 +123,4 @@ async def test_indexing():
     print("=" * 60)
 
 if __name__ == "__main__":
-    asyncio.run(test_indexing())
+    asyncio.run(indexing_test())

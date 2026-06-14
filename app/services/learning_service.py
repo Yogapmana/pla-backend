@@ -50,7 +50,7 @@ class LearningService:
         return msg
 
     async def get_chat_history(
-        self, session_id: UUID, topic_id: str, limit: int = 20
+        self, session_id: UUID, topic_id: str, limit: int = 50, offset: int = 0
     ) -> list[ChatMessage]:
         result = await self.db.execute(
             select(ChatMessage)
@@ -59,6 +59,7 @@ class LearningService:
                 ChatMessage.topic_id == topic_id,
             )
             .order_by(ChatMessage.created_at.desc())
+            .offset(offset)
             .limit(limit)
         )
         messages = result.scalars().all()

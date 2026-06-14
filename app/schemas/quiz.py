@@ -10,6 +10,7 @@ class QuizQuestion(BaseModel):
     explanation: str
 
 class QuizResponse(BaseModel):
+    quiz_id: str
     topic_id: str
     questions: list[QuizQuestion]
     total_questions: int
@@ -22,9 +23,10 @@ class QuizAnswer(BaseModel):
 class QuizSubmission(BaseModel):
     session_id: UUID
     topic_id: str
+    quiz_id: str | None = None  # Required for cache-based grading (preferred)
     answers: list[QuizAnswer]
     time_spent_seconds: int | None = None
-    questions_data: list[dict] | None = None
+    questions_data: list[dict] | None = None  # Legacy fallback only
 
 class QuizResultResponse(BaseModel):
     score: float
