@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     RESEARCHER_MODEL: str = Field(default="gemma4:e4b")
     COMPOSER_MODEL: str = Field(default="llama-3.3-70b-versatile")
     TUTOR_MODEL: str = Field(default="gemma4:e4b")
+    GENERAL_CHAT_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    RAGAS_MODEL: str = Field(default="llama-3.1-8b-instant")
     EMBEDDING_MODEL: str = Field(default="nomic-embed-text")
 
     # Image Generation

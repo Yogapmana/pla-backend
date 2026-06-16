@@ -3,6 +3,7 @@ from app.agents.state import PLAState
 from app.agents.planner import planner_node, replan_node
 from app.agents.researcher import researcher_node
 from app.agents.composer import composer_node
+from app.agents.mindmap_mapper import mindmap_mapper_node
 
 
 def _should_replan(state: PLAState) -> str:
@@ -48,9 +49,16 @@ def build_pla_graph():
     builder.add_node("researcher", researcher_node)
     builder.add_node("composer", composer_node)
     builder.add_node("replan", replan_node)
+    builder.add_node("mindmap_mapper", mindmap_mapper_node)
 
     # Linear edges for the generation pipeline
     builder.add_edge(START, "planner")
+    
+    # Parallel branch for mindmap generation (background task)
+    builder.add_edge("planner", "mindmap_mapper")
+    builder.add_edge("mindmap_mapper", END)
+    
+    # Main path continues
     builder.add_edge("planner", "researcher")
     builder.add_edge("researcher", "composer")
 

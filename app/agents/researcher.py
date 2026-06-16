@@ -165,7 +165,7 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
 async def researcher_node(state: PLAState) -> PLAState:
     curriculum = state.get("curriculum")
     if not curriculum:
-        return state
+        return {}
 
     if "agent_logs" not in state or state["agent_logs"] is None:
         state["agent_logs"] = []
@@ -188,7 +188,7 @@ async def researcher_node(state: PLAState) -> PLAState:
             message="No pending topics to research."
         )
         state["agent_logs"].append(log)
-        return state
+        return {"agent_logs": state["agent_logs"]}
 
     queries = target_topic.search_queries
     log = AgentLog(
@@ -239,4 +239,7 @@ async def researcher_node(state: PLAState) -> PLAState:
     )
     state["agent_logs"].append(success_log)
 
-    return state
+    return {
+        "research_results": state["research_results"],
+        "agent_logs": state["agent_logs"]
+    }

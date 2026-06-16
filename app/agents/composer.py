@@ -26,13 +26,8 @@ ATURAN PENULISAN DAN STRUKTUR MODUL:
 - Jelaskan konsep inti secara mendetail dan tuntas. Gunakan paragraf, daftar (bullet points), atau blok kutipan secara luwes.
 - JIKA ada data komparatif, spesifikasi, atau ringkasan teknis, amat disarankan membuat **tabel Markdown** agar lebih terstruktur.
 - Berikan contoh nyata atau studi kasus jika informasi tersebut tersedia di dalam teks referensi.
-- WAJIB gunakan **sitasi inline** mengacu pada sumber materi (contoh: "... menurut penelitian terbaru [1]."). Cocokkan nomor urut dengan referensi di akhir.
-- Di bagian PALING AKHIR modul, wajib buat dua bagian:
-  1. "## Referensi": Daftar sumber materi yang digunakan sesuai sitasi inline (Format: `[1] [Judul](URL)`).
-  2. "## Pelajari Lebih Dalam": Daftar kursus terkait (Format: `* **[Nama Kursus](URL)** - Platform`). Jika tidak ada, tulis "(Tidak ada kursus eksternal yang direkomendasikan)".
 
 PENTING:
-- Tulis SELURUH ISI MODUL dalam **Bahasa Indonesia** yang baik dan benar (meskipun sumber teks berbahasa Inggris).
 - Keluarkan HANYA teks Markdown murni tanpa basa-basi (jangan gunakan kalimat "Berikut adalah...").
 - Sesuaikan tingkat kedalaman materi untuk level: {level}.
 """
@@ -44,7 +39,7 @@ def composer_node(state: PLAState) -> PLAState:
     config = state.get("learning_config")
 
     if not curriculum or not research_results:
-        return state
+        return {}
 
     if "agent_logs" not in state or state["agent_logs"] is None:
         state["agent_logs"] = []
@@ -53,7 +48,7 @@ def composer_node(state: PLAState) -> PLAState:
     # Group results by topic_id. For now we just take the first topic found in results.
     topic_ids = list(set([r.topic_id for r in research_results]))
     if not topic_ids:
-        return state
+        return {}
 
     target_topic_id = topic_ids[0]
 
@@ -76,7 +71,7 @@ def composer_node(state: PLAState) -> PLAState:
     # Format sources — separate embeddable content from course links
     sources_text = ""
     courses_text = ""
-    max_total_chars = 25000  # Groq API total payload body limit prevention
+    max_total_chars = 15000  # Strict limit to prevent Groq 413 Payload Too Large (approx 3-4k tokens)
     current_chars = 0
 
     for idx, r in enumerate(research_results):
@@ -204,4 +199,8 @@ def composer_node(state: PLAState) -> PLAState:
         )
         state["agent_logs"].append(error_log)
 
-    return state
+    return {
+        "modules": state["modules"],
+        "agent_logs": state["agent_logs"],
+        "curriculum": curriculum
+    }

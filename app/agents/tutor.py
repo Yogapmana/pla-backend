@@ -65,6 +65,7 @@ async def tutor_chat(
     chunks = retrieve_and_rerank(
         user_id=user_id,
         query=query,
+        session_id=session_id,
         topic_id=topic_id,
         top_k_retrieve=8,
         top_k_rerank=3,
@@ -130,6 +131,14 @@ async def tutor_generate_quiz(
     """
     Quiz Generation Mode:
     Retrieves topic context from Qdrant and generates MCQ questions.
+
+    On JSON parse failure (LLM returns malformed output), we retry
+    once with a stricter prompt. Only after the retry fails do we
+    return an empty list — and only as a last resort. The downstream
+    `get_quiz` endpoint then 404s the request so the client gets a
+    clear "could not generate" error instead of silently submitting
+    a 0-question quiz that would record as 0/0 benar on the user's
+    history.
     """
     logger.info(
         f"[TUTOR] Generating {num_questions} quiz questions for '{topic_title}'..."
@@ -180,21 +189,70 @@ PENTING:
 
 Hanya output JSON array, tanpa teks tambahan."""
 
-    llm = get_llm(settings.TUTOR_MODEL)
-    response = llm.invoke(prompt)
-
     import json
     import re
 
-    # Extract JSON from response
-    raw = response.content.strip()
-    # Try to find JSON array in the response
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if match:
+    def _try_parse(raw_text: str) -> list[dict]:
+        """Pull a JSON array out of the LLM response and validate it.
+        Returns [] if the regex didn't match OR if json.loads failed
+        OR if the parsed result isn't a non-empty list of dicts each
+        with a `question` key.
+        """
+        match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+        if not match:
+            return []
         try:
-            return json.loads(match.group())
+            parsed = json.loads(match.group())
         except json.JSONDecodeError:
-            pass
+            return []
+        if not isinstance(parsed, list) or len(parsed) == 0:
+            return []
+        if not all(isinstance(item, dict) and item.get("question") for item in parsed):
+            return []
+        return parsed
 
-    logger.warning("[TUTOR] Could not parse quiz JSON, returning empty quiz.")
+    llm = get_llm(settings.TUTOR_MODEL)
+
+    # First attempt — the normal prompt.
+    response = llm.invoke(prompt)
+    # `response.content` is typed as `list[Union[str, dict]]` in newer
+    # LangChain versions but at runtime it's always a str for invoke().
+    # The `# type: ignore` is needed because Pyright can't narrow it
+    # without the full LangChain stubs.
+    response_text = response.content.strip()  # type: ignore[attr-defined]
+    questions = _try_parse(response_text)
+    if questions:
+        return questions
+
+    # Retry once with a stricter, "JSON only" prompt. This handles
+    # the common LLM failure mode where it adds a preamble like
+    # "Berikut soalnya:" or wraps the array in code fences.
+    logger.warning(
+        "[TUTOR] First quiz JSON parse failed for '%s', retrying with stricter prompt.",
+        topic_title,
+    )
+    strict_prompt = (
+        f"Buat tepat {num_questions} soal pilihan ganda dalam format JSON array.\n"
+        "JANGAN tambahkan teks apapun di luar array. Output HARUS dimulai dengan "
+        f"'[' dan diakhiri dengan ']'.\\n\\nMATERI:\\n{context}"
+    )
+    response = llm.invoke(strict_prompt)
+    response_text = response.content.strip()  # type: ignore[attr-defined]
+    questions = _try_parse(response_text)
+    if questions:
+        logger.info(
+            "[TUTOR] Retry succeeded for '%s' with %d questions.",
+            topic_title,
+            len(questions),
+        )
+        return questions
+
+    # Both attempts failed — log loudly and return empty list.
+    # The get_quiz endpoint will 404 the request so the client
+    # never records a 0/0 attempt.
+    logger.error(
+        "[TUTOR] Could not parse quiz JSON for '%s' after retry. "
+        "Returning empty quiz (client will see 404).",
+        topic_title,
+    )
     return []

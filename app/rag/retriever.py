@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 def retrieve_and_rerank(
     user_id: str,
     query: str,
+    session_id: str | None = None,
     topic_id: str | None = None,
     top_k_retrieve: int = 8,
     top_k_rerank: int = 3,
@@ -36,6 +37,7 @@ def retrieve_and_rerank(
         client=client,
         user_id=user_id,
         query_vector=combined_vec,
+        session_id=session_id,
         topic_id=topic_id,
         top_k=top_k_retrieve,
     )

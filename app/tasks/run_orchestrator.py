@@ -27,8 +27,11 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
     from app.utils.log_broker import publish_log
 
     async def _run():
-        # Clear any cached connection pool tied to a different or closed event loop
-        await engine.dispose()
+        # Clear any cached connection pool tied to a different or closed event loop.
+        # We use sync_engine.dispose(close=False) because the inherited connections
+        # from the parent process are tied to a different asyncio loop, and trying
+        # to close them asynchronously here will raise a RuntimeError.
+        engine.sync_engine.dispose(close=False)
 
         # ── Idempotency: clean up partial data from previous attempts ──
         # Celery auto-retries on failure. If a previous attempt created
@@ -36,6 +39,12 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
         # `duplicate key value violates unique constraint "topics_pkey"`
         # because the LLM-generated topic IDs are deterministic.
         # We delete any partial data for this session before re-inserting.
+        #
+        # NOTE: Deleting all Curriculum rows for this session also wipes
+        # any cached concept_graph_json. The new curriculum row will be
+        # inserted with concept_graph_json=None (default), and the
+        # ConceptGraphService.version_marker self-healing check will
+        # trigger a fresh build on the next read.
         async with AsyncSession(engine) as db:
             try:
                 # CASCADE handles modules, quiz_results, progress_signals, etc.
@@ -69,6 +78,7 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
             "chat_history": [],
             "quiz_results": [],
             "mastery_scores": {},
+            "concept_graph": None,
             "progress_signals": None,
             "feedback_actions": [],
             "agent_logs": [],
@@ -137,11 +147,17 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
             # Save curriculum
             curriculum = final_state.get("curriculum")
             if curriculum:
+                concept_graph = final_state.get("concept_graph")
+                if concept_graph:
+                    # Sync version marker to initial creation
+                    concept_graph["version_marker"] = 1
+                
                 curriculum_rec = Curriculum(
                     id=uuid.uuid4(),
                     session_id=uuid.UUID(session_id),
                     version=1,
                     curriculum_json=curriculum.model_dump(),
+                    concept_graph_json=concept_graph,
                 )
                 db.add(curriculum_rec)
                 await db.flush()
@@ -426,7 +442,7 @@ def resume_learning_pipeline(self, session_id: str):
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=30)
-def run_replan_task(self, session_id: str, action: str):
+def run_replan_task(self, session_id: str, action: str, user_id: str):
     """
     Phase polish #4 — Celery task that triggers curriculum replan
     after feedback engine decides repeat/review/accelerate.
@@ -476,6 +492,7 @@ def run_replan_task(self, session_id: str, action: str):
                 "chat_history": [],
                 "quiz_results": [],
                 "mastery_scores": {},
+                "concept_graph": None,
                 "progress_signals": None,
                 "feedback_actions": [],  # let graph re-derive from action param
                 "agent_logs": [],
@@ -485,13 +502,52 @@ def run_replan_task(self, session_id: str, action: str):
             new_curr = result.get("curriculum") if isinstance(result, dict) else getattr(result, "curriculum", None)
 
             if new_curr:
+                concept_graph = result.get("concept_graph") if isinstance(result, dict) else getattr(result, "concept_graph", None)
+                if concept_graph:
+                    concept_graph["version_marker"] = curriculum.version + 1
+
                 new_db_curr = DBCurriculum(
                     id=uuid.uuid4(),
                     session_id=UUID(session_id),
                     version=curriculum.version + 1,
                     curriculum_json=new_curr.model_dump() if hasattr(new_curr, "model_dump") else new_curr,
+                    concept_graph_json=concept_graph,
                 )
                 db.add(new_db_curr)
+                
+                # Sync Topic rows (Upsert)
+                # We upsert topics so new topics are added and existing ones get their status/schedule updated
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
+                new_topic_id = None
+                for week in new_curr.weeks:
+                    for day in week.days:
+                        # Find the first pending topic to generate a module for
+                        if day.status == "pending" and new_topic_id is None:
+                            new_topic_id = day.topic_id
+                            
+                        stmt = pg_insert(DBTopic).values(
+                            id=day.topic_id,
+                            session_id=UUID(session_id),
+                            curriculum_id=new_db_curr.id,
+                            title=day.title,
+                            week_number=week.week,
+                            day_number=day.day,
+                            duration_minutes=day.duration_minutes,
+                            status=day.status,
+                            search_queries=day.search_queries
+                        ).on_conflict_do_update(
+                            index_elements=['id'],
+                            set_={
+                                "curriculum_id": new_db_curr.id,
+                                "week_number": week.week,
+                                "day_number": day.day,
+                                "duration_minutes": day.duration_minutes,
+                                "status": day.status,
+                                "search_queries": day.search_queries
+                            }
+                        )
+                        await db.execute(stmt)
+
                 # Log the auto-replan
                 db.add(DBAgentLog(
                     id=uuid.uuid4(),
@@ -501,6 +557,19 @@ def run_replan_task(self, session_id: str, action: str):
                     message=f"Auto-replan triggered: action={action}",
                 ))
                 await db.commit()
+
+                # Trigger module generation for the new pending topic
+                if new_topic_id:
+                    from app.tasks.generate_module import generate_module_for_topic
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"[REPLAN] Triggering module generation for adapted topic: {new_topic_id}")
+                    generate_module_for_topic.delay(
+                        session_id=session_id,
+                        user_id=user_id,
+                        topic_id=new_topic_id,
+                    )
+
                 return {"status": "ok", "new_version": curriculum.version + 1}
             return {"status": "no_change"}
 

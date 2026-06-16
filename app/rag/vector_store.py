@@ -59,22 +59,25 @@ def search_chunks(
     client: QdrantClient,
     user_id: str,
     query_vector: list[float],
+    session_id: str | None = None,
     topic_id: str | None = None,
     top_k: int = 8,
 ) -> list[dict]:
-    """Search for similar chunks in Qdrant, optionally filtered by topic_id."""
+    """Search for similar chunks in Qdrant, optionally filtered by session_id and topic_id."""
     collection_name = get_collection_name(user_id)
     existing = [c.name for c in client.get_collections().collections]
     if collection_name not in existing:
         return []
 
-    query_filter = None
+    must_conditions = []
+    if session_id:
+        must_conditions.append(FieldCondition(key="session_id", match=MatchValue(value=str(session_id))))
     if topic_id:
-        query_filter = Filter(
-            must=[
-                FieldCondition(key="topic_id", match=MatchValue(value=topic_id))
-            ]
-        )
+        must_conditions.append(FieldCondition(key="topic_id", match=MatchValue(value=str(topic_id))))
+
+    query_filter = None
+    if must_conditions:
+        query_filter = Filter(must=must_conditions)
 
     results = client.query_points(
         collection_name=collection_name,

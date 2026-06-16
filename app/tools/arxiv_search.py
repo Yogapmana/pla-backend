@@ -6,7 +6,7 @@ def arxiv_search_tool(query: str, max_results: int = 3) -> list[dict]:
     """Search Arxiv for academic papers and return their abstracts.
     Useful for deep academic or scientific research."""
     try:
-        client = arxiv.Client()
+        client = arxiv.Client(num_retries=0)
         search = arxiv.Search(
             query=query,
             max_results=max_results,

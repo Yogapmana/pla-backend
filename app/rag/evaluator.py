@@ -294,11 +294,12 @@ def get_rag_evaluator() -> RAGEvaluator | None:
 
         # Build the LLM with generous token limit (RAGAS prompts are
         # often long; default 1024 is too low and causes LLMDidNotFinish).
+        # We explicitly use a smaller model for evaluation to save API tokens and avoid Rate Limits!
         try:
-            llm = get_llm(settings.TUTOR_MODEL, max_tokens=2048)
+            llm = get_llm(settings.RAGAS_MODEL, max_tokens=2048)
         except TypeError:
             # llm_factory doesn't accept max_tokens; fall back to default
-            llm = get_llm(settings.TUTOR_MODEL)
+            llm = get_llm(settings.RAGAS_MODEL)
 
         embeddings = None
         try:

@@ -25,7 +25,7 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
         kwargs["max_tokens"] = max_tokens
 
     # Check if the requested model is likely a Groq model
-    if model_name in groq_models or "llama-3" in model_name or model_name.startswith("openai/"):
+    if model_name in groq_models or "llama-3" in model_name or "qwen" in model_name or model_name.startswith("openai/"):
         return ChatGroq(
             model_name=model_name,
             api_key=settings.GROQ_API_KEY,

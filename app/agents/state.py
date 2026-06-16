@@ -97,3 +97,4 @@ class PLAState(TypedDict):
     progress_signals: Optional[ProgressSignals]
     feedback_actions: List[FeedbackAction]
     agent_logs: List[AgentLog]
+    concept_graph: Optional[Dict[str, Any]]

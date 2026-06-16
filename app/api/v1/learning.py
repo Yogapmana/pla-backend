@@ -15,79 +15,6 @@ from app.models.learning import LearningSession, Topic, LearningModule
 logger = logging.getLogger(__name__)
 
 
-async def _run_auto_feedback(session_id: str, topic_id: str) -> None:
-    """
-    Phase polish #4 — fire-and-forget feedback evaluation after a topic
-    is marked complete. Reads accumulated signals for the just-completed
-    topic, computes mastery, persists a FeedbackAction, and triggers
-    a curriculum replan if the action is repeat/review/accelerate.
-    Never raises — errors are logged.
-    """
-    try:
-        from app.config import settings
-        from sqlalchemy.ext.asyncio import create_async_engine
-        engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-        SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-        async with SessionLocal() as db:
-            from app.models.learning import Topic
-            from sqlalchemy import select
-            topic = (await db.execute(
-                select(Topic).where(Topic.id == topic_id)
-            )).scalar_one_or_none()
-            if not topic:
-                logger.warning(f"[AUTO-FEEDBACK] Topic {topic_id} not found")
-                return
-
-            # Aggregate signals from the topic row
-            from app.agents.feedback_engine import calculate_mastery, evaluate_mastery
-            from app.agents.state import ProgressSignals
-            signals = ProgressSignals(
-                quiz_score=topic.quiz_score,
-                reading_time_ratio=topic.reading_time_ratio,
-                question_frequency=topic.question_frequency_score,
-                self_assessment=topic.self_assessment_score,
-                material_rating=topic.material_rating_score,
-            )
-            score = calculate_mastery(signals)
-            action = evaluate_mastery(score, topic_id)
-            logger.info(
-                f"[AUTO-FEEDBACK] {topic_id} mastery={score:.2f} -> {action.action}"
-            )
-
-            # Persist a FeedbackAction row
-            from app.models.learning import FeedbackAction
-            from datetime import datetime
-            fb = FeedbackAction(
-                id=uuid.uuid4(),
-                session_id=UUID(session_id),
-                topic_id=topic_id,
-                action=action.action,
-                mastery_score=score,
-                reason=f"Auto-evaluated after topic completion. Signals: {signals}",
-                created_at=datetime.utcnow(),
-            )
-            db.add(fb)
-
-            # Update topic mastery_score field
-            topic.mastery_score = score
-
-            await db.commit()
-            await engine.dispose()
-
-            # If replan needed, kick it off as a Celery task
-            if action.action in ("repeat", "review", "accelerate"):
-                logger.info(
-                    f"[AUTO-FEEDBACK] Triggering replan for session {session_id} "
-                    f"due to action={action.action}"
-                )
-                # Use Celery .delay() for non-blocking background processing
-                try:
-                    from app.tasks.run_orchestrator import run_replan_task
-                    run_replan_task.delay(session_id, action.action)
-                except Exception as e:
-                    logger.warning(f"[AUTO-FEEDBACK] Could not dispatch replan: {e}")
-    except Exception as e:
-        logger.error(f"[AUTO-FEEDBACK] Background failed: {e}")
 from app.services.learning_service import LearningService
 from app.tasks.run_orchestrator import run_learning_pipeline, resume_learning_pipeline
 from app.tasks.generate_module import generate_module_for_topic
@@ -129,6 +56,8 @@ class TopicResponse(BaseModel):
     duration_minutes: int
     status: str
     scheduled_date: str | None = None
+    feedback_action: str | None = None
+    mastery_score: float | None = None
 
 
 class ModuleResponse(BaseModel):
@@ -303,6 +232,8 @@ async def get_session_topics(
             duration_minutes=t.duration_minutes,
             status=t.status,
             scheduled_date=t.scheduled_date.isoformat() if t.scheduled_date else None,
+            feedback_action=t.feedback_action,
+            mastery_score=t.mastery_score,
         )
         for t in topics
     ]
@@ -358,15 +289,6 @@ async def complete_topic(
     
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
 
-    # ── Phase polish #4: Auto-trigger feedback evaluation ──
-    # After marking a topic complete, automatically run the feedback engine
-    # in the background. This computes mastery from accumulated signals
-    # and may trigger curriculum replan if the user is struggling.
-    # We do this fire-and-forget so the user response is not blocked.
-    import asyncio
-    asyncio.create_task(
-        _run_auto_feedback(str(session_id), topic_id)
-    )
 
     next_topic = await service.activate_next_topic(session_id, topic_id)
 

@@ -2,7 +2,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from app.models.learning import LearningSession, Topic, LearningModule
+from app.models.learning import LearningSession, Topic, LearningModule, ResourceLink
 from app.models.agent import ChatMessage
 
 class LearningService:
@@ -30,7 +30,7 @@ class LearningService:
     async def save_chat_message(
         self,
         session_id: UUID,
-        topic_id: str,
+        topic_id: str | None,
         role: str,
         content: str,
         sources: list[dict] | None = None,
@@ -50,14 +50,17 @@ class LearningService:
         return msg
 
     async def get_chat_history(
-        self, session_id: UUID, topic_id: str, limit: int = 50, offset: int = 0
+        self, session_id: UUID, topic_id: str | None, limit: int = 50, offset: int = 0
     ) -> list[ChatMessage]:
+        query = select(ChatMessage).where(ChatMessage.session_id == session_id)
+        if topic_id is not None:
+            query = query.where(ChatMessage.topic_id == topic_id)
+        else:
+            query = query.where(ChatMessage.topic_id.is_(None))
+            
         result = await self.db.execute(
-            select(ChatMessage)
-            .where(
-                ChatMessage.session_id == session_id,
-                ChatMessage.topic_id == topic_id,
-            )
+            query
+
             .order_by(ChatMessage.created_at.desc())
             .offset(offset)
             .limit(limit)
@@ -84,9 +87,27 @@ class LearningService:
         result = await self.db.execute(
             select(LearningSession)
             .where(LearningSession.user_id == user_id)
+            .where(LearningSession.level != "General Chat")
             .order_by(LearningSession.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def get_chat_sessions(self, user_id: UUID) -> list[LearningSession]:
+        result = await self.db.execute(
+            select(LearningSession)
+            .where(LearningSession.user_id == user_id)
+            .where(LearningSession.level == "General Chat")
+            .order_by(LearningSession.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def delete_session(self, session_id: UUID) -> bool:
+        session = await self.get_session(session_id)
+        if not session:
+            return False
+        await self.db.delete(session)
+        await self.db.commit()
+        return True
 
     async def save_curriculum(self, session_id: UUID, curriculum_json: dict, version: int = 1) -> Curriculum:
         from app.models.learning import Curriculum
@@ -213,5 +234,12 @@ class LearningService:
             select(AgentLog)
             .where(AgentLog.session_id == session_id)
             .order_by(AgentLog.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def get_resource_links(self, session_id: UUID) -> list[ResourceLink]:
+        """All resource links attached to any module/topic in this session."""
+        result = await self.db.execute(
+            select(ResourceLink).where(ResourceLink.session_id == session_id)
         )
         return list(result.scalars().all())

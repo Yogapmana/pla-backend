@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.models.agent import QuizResult
+from app.models.agent import QuizResult, ProgressSignal as DBProgressSignal
+from app.models.learning import Topic
 from app.schemas.quiz import QuizResponse, QuizSubmission, QuizResultResponse, QuizQuestion
 from app.services.learning_service import LearningService
 from app.services.quiz_cache import (
@@ -164,14 +165,25 @@ async def submit_quiz(
     db.add(quiz_result)
     await db.commit()
 
-    # Trigger next module generation if quiz score >= 80%
-    if percentage >= 80:
-        await trigger_next_module_after_quiz(
-            session_id=submission.session_id,
-            user_id=str(current_user.id),
-            topic_id=submission.topic_id,
-            db=db,
+    # Insert ProgressSignal for quiz_score
+    new_signal = DBProgressSignal(
+        id=uuid.uuid4(),
+        session_id=submission.session_id,
+        topic_id=submission.topic_id,
+        signal_type="quiz_score",
+        value=score
+    )
+    db.add(new_signal)
+    await db.commit()
+
+    import asyncio
+    asyncio.create_task(
+        _run_post_quiz_evaluation(
+            str(submission.session_id), 
+            str(current_user.id), 
+            submission.topic_id
         )
+    )
 
     # Generate feedback
     if percentage >= 80:
@@ -192,8 +204,7 @@ async def submit_quiz(
 
 async def trigger_next_module_after_quiz(session_id: uuid.UUID, user_id: str, topic_id: str, db: AsyncSession):
     """
-    After a quiz is submitted with score >= 80%, trigger module generation for the next topic.
-    This replaces the old flow where module was generated when topic was marked complete.
+    Trigger module generation for the next topic.
     """
     import logging
     logger = logging.getLogger(__name__)
@@ -202,14 +213,105 @@ async def trigger_next_module_after_quiz(session_id: uuid.UUID, user_id: str, to
     next_topic = await service.activate_next_topic(session_id, topic_id)
 
     if next_topic:
-        logger.info(f"[QUIZ >=80%] Triggering module generation for next topic: {next_topic.id}")
+        logger.info(f"[EVALUATION] Triggering module generation for next topic: {next_topic.id}")
         generate_module_for_topic.delay(
             session_id=str(session_id),
             user_id=user_id,
             topic_id=next_topic.id,
         )
     else:
-        logger.info(f"[QUIZ >=80%] No next topic to generate module for after {topic_id}")
+        logger.info(f"[EVALUATION] No next topic to generate module for after {topic_id}")
+
+
+async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str) -> None:
+    """
+    Phase polish #4 — fire-and-forget feedback evaluation after a quiz is submitted.
+    Reads accumulated signals, computes mastery, persists a FeedbackAction, and 
+    triggers a curriculum replan or continues to the next topic.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        from app.config import settings
+        from sqlalchemy.ext.asyncio import create_async_engine
+        from sqlalchemy import select
+        from app.db.database import async_sessionmaker
+        from app.models.learning import Topic
+        from app.models.agent import ProgressSignal
+        from app.agents.feedback_engine import calculate_mastery, evaluate_mastery
+        from app.agents.state import ProgressSignals
+        import uuid
+        from datetime import datetime
+
+        engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+        SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+        async with SessionLocal() as db:
+            topic = (await db.execute(
+                select(Topic).where(Topic.id == topic_id)
+            )).scalar_one_or_none()
+            if not topic:
+                logger.warning(f"[POST-QUIZ-EVAL] Topic {topic_id} not found")
+                return
+
+            # Fetch all signals
+            signal_result = await db.execute(
+                select(ProgressSignal)
+                .where(ProgressSignal.session_id == uuid.UUID(session_id))
+                .where(ProgressSignal.topic_id == topic_id)
+            )
+            db_signals = signal_result.scalars().all()
+
+            agg_signals = {}
+            for s in db_signals:
+                agg_signals[s.signal_type] = s.value
+
+            signals = ProgressSignals(
+                quiz_score=agg_signals.get("quiz_score"),
+                reading_time_ratio=agg_signals.get("reading_time_ratio"),
+                question_frequency=agg_signals.get("question_frequency"),
+                self_assessment=agg_signals.get("self_assessment"),
+                material_rating=agg_signals.get("material_rating")
+            )
+
+            score = calculate_mastery(signals)
+            action = evaluate_mastery(score, topic_id)
+            logger.info(f"[POST-QUIZ-EVAL] {topic_id} mastery={score:.2f} -> {action.action}")
+
+            # Update topic — the `Topic.feedback_action` column
+            # already stores the action.action string, and the
+            # mastery scores are written to their respective
+            # columns. There is no separate `feedback_actions` DB
+            # table in the schema, so we don't try to insert one
+            # here (the previous code imported a non-existent
+            # SQLAlchemy model and crashed silently in the
+            # fire-and-forget task — see the `[POST-QUIZ-EVAL]
+            # Background failed: cannot import name 'FeedbackAction'`
+            # log lines).
+            topic.mastery_score = score
+            topic.quiz_score = signals.quiz_score
+            topic.reading_time_ratio = signals.reading_time_ratio
+            topic.question_frequency_score = signals.question_frequency
+            topic.self_assessment_score = signals.self_assessment
+            topic.material_rating_score = signals.material_rating
+            topic.feedback_action = action.action
+
+            await db.commit()
+
+            if action.action in ("repeat", "review", "accelerate"):
+                logger.info(f"[POST-QUIZ-EVAL] Triggering replan for session {session_id} due to action={action.action}")
+                try:
+                    from app.tasks.run_orchestrator import run_replan_task
+                    run_replan_task.delay(session_id, action.action, user_id)
+                except Exception as e:
+                    logger.warning(f"[POST-QUIZ-EVAL] Could not dispatch replan: {e}")
+            else:
+                # "continue" or pass -> just activate next topic and generate module
+                await trigger_next_module_after_quiz(uuid.UUID(session_id), user_id, topic_id, db)
+                
+            await engine.dispose()
+    except Exception as e:
+        logger.error(f"[POST-QUIZ-EVAL] Background failed: {e}")
 
 
 @router.get("/history/{session_id}")
@@ -218,23 +320,182 @@ async def get_quiz_history(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get quiz attempt history for a learning session."""
-    from sqlalchemy.future import select
+    """
+    Get all quiz attempts for a learning session, joined with topic
+    title for display in the UI.
+
+    Each attempt is enriched with:
+    - ``topic_title`` (joined from `Topic`) — so the frontend can
+      render "Kuis: <topic title>" without a separate topics query.
+    - ``time_spent_seconds`` — total time the user spent on the
+      attempt (for stats like "5 menit per kuis").
+    - ``attempt_number`` — the Nth attempt at this topic (1-indexed).
+      Useful for the per-topic history page to show "Attempt 1 of 3".
+
+    The list is sorted by ``created_at DESC`` so the most recent
+    attempt is first.
+    """
+    from sqlalchemy import select
     result = await db.execute(
         select(QuizResult)
         .where(QuizResult.session_id == session_id)
+        # Join Topic to get the title (avoids N+1 per-row queries).
+        .outerjoin(Topic, QuizResult.topic_id == Topic.id)
         .order_by(QuizResult.created_at.desc())
     )
+    # We re-query the distinct topic_ids in this result and zip
+    # titles by id — clean and avoids any lazy-load surprises.
     records = result.scalars().all()
+    topic_ids = list({r.topic_id for r in records if r.topic_id})
+    topic_titles: dict[str, str] = {}
+    if topic_ids:
+        topics_result = await db.execute(
+            select(Topic.id, Topic.title).where(Topic.id.in_(topic_ids))
+        )
+        topic_titles = {row[0]: row[1] for row in topics_result.all()}
+
     return [
         {
             "id": str(r.id),
             "topic_id": r.topic_id,
+            "topic_title": topic_titles.get(r.topic_id) if r.topic_id else None,
             "score": r.score,
             "total_questions": r.total_questions,
             "correct_answers": r.correct_answers,
-            "percentage": round(r.score * 100, 1),
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            **_build_attempt_extras(r),
+            "created_at": r.created_at.isoformat() if r.created_at is not None else None,
         }
         for r in records
     ]
+
+
+def _build_attempt_extras(quiz_result) -> dict:
+    """
+    Compute percentage + iso created_at from a QuizResult row.
+
+    Pulled out of the dict-comprehension above so Pyright can resolve
+    the SQLAlchemy column types cleanly (inside the comprehension,
+    ``r.score`` is typed as ``Column[Unknown]`` even though at
+    runtime it's a ``float``).
+    """
+    score_value = float(quiz_result.score) if quiz_result.score is not None else 0.0
+    return {
+        "percentage": round(score_value * 100, 1),
+        "time_spent_seconds": quiz_result.time_spent_seconds,
+        "attempt_number": quiz_result.attempt_number,
+    }
+
+
+@router.get("/history/{session_id}/topic/{topic_id}")
+async def get_quiz_history_by_topic(
+    session_id: uuid.UUID,
+    topic_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get all quiz attempts for ONE topic within a session, ordered
+    by ``created_at ASC`` (oldest first) — so the frontend can
+    show attempt #1, #2, #3 in chronological order on the
+    per-topic history page.
+
+    Returns the same shape as ``get_quiz_history`` but filtered
+    to a single topic. The frontend uses this to render the
+    "Attempt N of M" progression chart per topic.
+    """
+    from sqlalchemy import select
+    result = await db.execute(
+        select(QuizResult)
+        .where(QuizResult.session_id == session_id)
+        .where(QuizResult.topic_id == topic_id)
+        .order_by(QuizResult.created_at.asc())
+    )
+    records = result.scalars().all()
+
+    # Topic title (single row, but join cleanly).
+    topic_title = None
+    if topic_id:
+        t = await db.execute(
+            select(Topic.title).where(Topic.id == topic_id)
+        )
+        topic_title = t.scalar_one_or_none()
+
+    return {
+        "topic_id": topic_id,
+        "topic_title": topic_title,
+        "attempts": [
+            {
+                "id": str(r.id),
+                "topic_id": r.topic_id,
+                "score": r.score,
+                "total_questions": r.total_questions,
+                "correct_answers": r.correct_answers,
+                **_build_attempt_extras(r),
+                "created_at": r.created_at.isoformat() if r.created_at is not None else None,
+            }
+            for r in records
+        ],
+    }
+
+
+@router.get("/attempt/{attempt_id}")
+async def get_quiz_attempt_detail(
+    attempt_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Fetch a single quiz attempt with the full ``answers_detail``
+    payload (which question the user got right/wrong, what they
+    selected vs. the correct answer).
+
+    Used by the per-topic history page's "Review" action — shows
+    the user which questions they missed so they can go re-read
+    the material and retry. Returns 404 if the attempt doesn't
+    exist or belongs to a different user.
+    """
+    from sqlalchemy import select
+    from app.models.learning import LearningSession
+    result = await db.execute(
+        select(QuizResult, LearningSession.user_id)
+        .join(LearningSession, QuizResult.session_id == LearningSession.id)
+        .where(QuizResult.id == attempt_id)
+    )
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Quiz attempt not found")
+    quiz_result, session_user_id = row
+    # Defense-in-depth: ensure the requester owns this session.
+    if str(session_user_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # Look up the topic title (best-effort — may be null if the
+    # Topic row was deleted but the QuizResult persists).
+    topic_title = None
+    if quiz_result.topic_id:
+        t = await db.execute(
+            select(Topic.title).where(Topic.id == quiz_result.topic_id)
+        )
+        topic_title = t.scalar_one_or_none()
+
+    # Compute the percentage from the score (score is 0-1).
+    score_value = float(quiz_result.score) if quiz_result.score is not None else 0.0
+    percentage = round(score_value * 100, 1)
+    created_at_iso = (
+        quiz_result.created_at.isoformat() if quiz_result.created_at is not None else None
+    )
+
+    return {
+        "id": str(quiz_result.id),
+        "session_id": str(quiz_result.session_id),
+        "topic_id": quiz_result.topic_id,
+        "topic_title": topic_title,
+        "score": score_value,
+        "total_questions": quiz_result.total_questions,
+        "correct_answers": quiz_result.correct_answers,
+        "percentage": percentage,
+        "time_spent_seconds": quiz_result.time_spent_seconds,
+        "attempt_number": quiz_result.attempt_number,
+        "answers_detail": quiz_result.answers_detail or [],
+        "created_at": created_at_iso,
+    }

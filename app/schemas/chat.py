@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class ChatRequest(BaseModel):
     session_id: UUID
-    topic_id: str
+    topic_id: str | None = None
     message: str
     include_sources: bool = True
 
@@ -46,3 +46,11 @@ class ChatHistoryMessage(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ChatSessionResponse(BaseModel):
+    id: str
+    topic: str
+    created_at: str
+
+class ChatSessionCreate(BaseModel):
+    title: str = "Percakapan Baru"

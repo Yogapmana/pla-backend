@@ -25,6 +25,8 @@ class Curriculum(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("learning_sessions.id", ondelete="CASCADE"), nullable=False)
     version = Column(Integer, default=1)
     curriculum_json = Column(JSONB, nullable=False)
+    mindmap_json = Column(JSONB, nullable=True)  # Cached AI-generated Mermaid mind map
+    concept_graph_json = Column(JSONB, nullable=True)  # Cached concept graph (root → clusters → concepts → topics → resources)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Topic(Base):

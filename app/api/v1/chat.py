@@ -6,13 +6,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db, async_sessionmaker
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.schemas.chat import ChatRequest, ChatResponse, ChatHistoryMessage, ChatSource, RAGMetrics, RAGASSummary
+from app.schemas.chat import ChatRequest, ChatResponse, ChatHistoryMessage, ChatSource, RAGMetrics, RAGASSummary, ChatSessionCreate, ChatSessionResponse
 from app.services.learning_service import LearningService
 from app.agents.tutor import tutor_chat
+from app.agents.general_chatbot import general_chatbot_chat
 from app.rag.indexer import extract_text_from_file, index_uploaded_document
 from app.rag.evaluator import get_rag_evaluator
 from app.models.agent import ChatMessage
+from app.models.learning import LearningSession
+import re
+
 logger = logging.getLogger(__name__)
+
+def strip_hidden_content(text: str) -> str:
+    """Remove the hidden document content block from the message before returning to the UI."""
+    return re.sub(r'<!-- UPLOADED_DOCUMENT_CONTENT:.*?-->', '', text, flags=re.DOTALL).strip()
 
 router = APIRouter()
 
@@ -60,90 +68,149 @@ async def _run_ragas_background(
     except Exception as e:
         logger.error(f"[RAGAS] Background eval failed: {e}")
 
+@router.get("/sessions", response_model=list[ChatSessionResponse])
+async def get_chat_sessions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = LearningService(db)
+    sessions = await service.get_chat_sessions(current_user.id)
+    return [
+        ChatSessionResponse(
+            id=str(s.id),
+            topic=s.topic,
+            created_at=s.created_at.isoformat() if s.created_at else ""
+        ) for s in sessions
+    ]
+
+@router.post("/sessions", response_model=ChatSessionResponse)
+async def create_chat_session(
+    request: ChatSessionCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = LearningService(db)
+    session = await service.create_session(
+        user_id=current_user.id,
+        topic=request.title,
+        level="General Chat",
+        duration_weeks=0,
+        hours_per_day=0.0
+    )
+    return ChatSessionResponse(
+        id=str(session.id),
+        topic=session.topic,
+        created_at=session.created_at.isoformat() if session.created_at else ""
+    )
+
+@router.delete("/sessions/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    service = LearningService(db)
+    session = await service.get_session(uuid.UUID(session_id))
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await service.delete_session(uuid.UUID(session_id))
+    return {"status": "success"}
+
 @router.post("/message", response_model=ChatResponse)
 async def send_message(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a message to the Tutor Agent and receive a RAG-based response."""
-    service = LearningService(db)
+    try:
+        service = LearningService(db)
 
-    # Verify the session belongs to the current user
-    session = await service.get_session(request.session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
+        # Verify the session belongs to the current user
+        session = await service.get_session(request.session_id)
+        if not session or session.user_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Learning session not found")
 
-    # Get recent chat history for context
-    history_msgs = await service.get_chat_history(request.session_id, request.topic_id)
-    chat_history = [
-        {"role": msg.role, "content": msg.content}
-        for msg in history_msgs
-    ]
+        # Get recent chat history for context
+        history_msgs = await service.get_chat_history(request.session_id, request.topic_id)
+        chat_history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in history_msgs
+        ]
 
-    # Save user message
-    await service.save_chat_message(
-        session_id=request.session_id,
-        topic_id=request.topic_id,
-        role="user",
-        content=request.message,
-    )
-
-    # Call Tutor Agent
-    result = await tutor_chat(
-        user_id=str(current_user.id),
-        session_id=str(request.session_id),
-        topic_id=request.topic_id,
-        query=request.message,
-        chat_history=chat_history,
-        include_sources=request.include_sources,
-    )
-
-    # Save assistant response
-    saved_msg = await service.save_chat_message(
-        session_id=request.session_id,
-        topic_id=request.topic_id,
-        role="assistant",
-        content=result["response"],
-        sources=result.get("sources", []),
-        latency_ms=result.get("latency_ms"),
-    )
-
-    # ── Fire-and-forget RAGAS evaluation (Phase polish #1) ──
-    # Don't block the user response. If RAGAS isn't installed or the
-    # LLM judge fails, we still return the response successfully.
-    chunks = result.get("chunks", [])
-    contexts = [c.get("text", "") for c in chunks] if chunks else []
-    if not contexts and result.get("sources"):
-        contexts = [s.get("title", "") for s in result.get("sources", [])]
-
-    asyncio.create_task(
-        _run_ragas_background(
-            db_url=str(request.session_id),
-            message_id=str(saved_msg.id),
-            question=request.message,
-            answer=result["response"],
-            contexts=contexts,
+        # Save user message
+        await service.save_chat_message(
+            session_id=request.session_id,
+            topic_id=request.topic_id,
+            role="user",
+            content=request.message,
         )
-    )
 
-    return ChatResponse(
-        message_id=str(saved_msg.id),
-        response=result["response"],
-        sources=[
-            ChatSource(**s) for s in result.get("sources", [])
-        ],
-        rag_metrics=RAGMetrics(
-            latency_ms=result.get("latency_ms", 0),
-            chunks_used=result.get("chunks_used", 0),
-        ),
-    )
+        # Call appropriate Agent
+        if request.topic_id:
+            result = await tutor_chat(
+                user_id=str(current_user.id),
+                session_id=str(request.session_id),
+                topic_id=request.topic_id,
+                query=request.message,
+                chat_history=chat_history,
+                include_sources=request.include_sources,
+            )
+        else:
+            result = await general_chatbot_chat(
+                user_id=str(current_user.id),
+                session_id=str(request.session_id),
+                query=request.message,
+                chat_history=chat_history,
+            )
+
+        # Save assistant response
+        saved_msg = await service.save_chat_message(
+            session_id=request.session_id,
+            topic_id=request.topic_id,
+            role="assistant",
+            content=result["response"],
+            sources=result.get("sources", []),
+            latency_ms=result.get("latency_ms"),
+        )
+
+        # ── Fire-and-forget RAGAS evaluation (Phase polish #1) ──
+        chunks = result.get("chunks", [])
+        contexts = [c.get("text", "") for c in chunks] if chunks else []
+        if not contexts and result.get("sources"):
+            contexts = [s.get("title", "") for s in result.get("sources", [])]
+
+        asyncio.create_task(
+            _run_ragas_background(
+                db_url=str(request.session_id),
+                message_id=str(saved_msg.id),
+                question=request.message,
+                answer=result["response"],
+                contexts=contexts,
+            )
+        )
+
+        return ChatResponse(
+            message_id=str(saved_msg.id),
+            response=result["response"],
+            sources=[
+                ChatSource(**s) for s in result.get("sources", [])
+            ],
+            rag_metrics=RAGMetrics(
+                latency_ms=result.get("latency_ms", 0),
+                chunks_used=result.get("chunks_used", 0),
+            ),
+        )
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        logger.error(f"Error in chat endpoint: {err_msg}")
+        raise HTTPException(status_code=400, detail=str(err_msg))
 
 
-@router.get("/history/{topic_id}", response_model=list[ChatHistoryMessage])
+@router.get("/history", response_model=list[ChatHistoryMessage])
 async def get_chat_history(
-    topic_id: str,
     session_id: uuid.UUID,
+    topic_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
     current_user: User = Depends(get_current_user),
@@ -160,7 +227,7 @@ async def get_chat_history(
         ChatHistoryMessage(
             id=str(msg.id),
             role=msg.role,
-            content=msg.content,
+            content=strip_hidden_content(msg.content),
             created_at=msg.created_at.isoformat() if msg.created_at else "",
             rag_faithfulness=msg.rag_faithfulness,
             rag_answer_relevancy=msg.rag_answer_relevancy,
@@ -245,10 +312,10 @@ async def get_ragas_summary(
     )
 
 
-@router.delete("/history/{topic_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_chat_history(
-    topic_id: str,
     session_id: uuid.UUID,
+    topic_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -260,19 +327,20 @@ async def delete_chat_history(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Learning session not found")
 
-    await db.execute(
-        delete(ChatMessage).where(
-            ChatMessage.session_id == session_id,
-            ChatMessage.topic_id == topic_id,
-        )
-    )
+    query = delete(ChatMessage).where(ChatMessage.session_id == session_id)
+    if topic_id is not None:
+        query = query.where(ChatMessage.topic_id == topic_id)
+    else:
+        query = query.where(ChatMessage.topic_id.is_(None))
+        
+    await db.execute(query)
     await db.commit()
 
 @router.post("/upload")
 async def upload_document(
     file: UploadFile = File(...),
     session_id: str = Form(...),
-    topic_id: str = Form(...),
+    topic_id: str | None = Form(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -305,9 +373,24 @@ async def upload_document(
         chunks_indexed = index_uploaded_document(
             user_id=str(current_user.id),
             session_id=str(session_id),
-            topic_id=str(topic_id),
+            topic_id=str(topic_id) if topic_id else None,
             filename=file.filename,
             raw_text=raw_text,
+        )
+
+        # Save a system message so the LLM and user know a document was uploaded
+        # We embed the raw text in an HTML comment so it's passed to the LLM but hidden from the user UI
+        safe_text = raw_text[:25000] # truncate to ~25k chars to prevent context overflow
+        content_for_db = (
+            f"*(Sistem: Dokumen '{file.filename}' berhasil diunggah dan siap digunakan sebagai referensi.)*\n\n"
+            f"<!-- UPLOADED_DOCUMENT_CONTENT:\n{safe_text}\n-->"
+        )
+        
+        await service.save_chat_message(
+            session_id=session_uuid,
+            topic_id=topic_id,
+            role="assistant",
+            content=content_for_db,
         )
 
         return {
