@@ -17,7 +17,8 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
         "llama-3.1-8b-instant",
         "gemma2-9b-it",
         "mixtral-8x7b-32768",
-        "openai/gpt-oss-120b"
+        "openai/gpt-oss-120b",
+        "meta-llama/llama-4-scout-17b-16e-instruct"
     ]
 
     kwargs = {"temperature": temperature}

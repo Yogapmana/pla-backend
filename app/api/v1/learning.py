@@ -2,7 +2,8 @@ from uuid import UUID
 import uuid
 import logging
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Form, File, UploadFile
+from typing import List
 from fastapi_cache.decorator import cache
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -13,6 +14,8 @@ from app.models.user import User
 from app.models.learning import LearningSession, Topic, LearningModule
 
 logger = logging.getLogger(__name__)
+
+import fitz  # PyMuPDF
 
 
 from app.services.learning_service import LearningService
@@ -73,7 +76,12 @@ class ModuleResponse(BaseModel):
 
 @router.post("/start", response_model=LearningSessionResponse)
 async def start_learning_session(
-    request: LearningStartRequest,
+    topic: str = Form(...),
+    duration_weeks: int = Form(...),
+    level: str = Form(...),
+    hours_per_day: float = Form(...),
+    language: str = Form("id"),
+    files: List[UploadFile] = File(default=[]),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -84,13 +92,32 @@ async def start_learning_session(
     """
     service = LearningService(db)
 
+    # Process uploaded files (extract text from PDFs)
+    context_text = ""
+    for file in files:
+        if file.filename and file.filename.endswith(".pdf"):
+            try:
+                # Read file content into memory
+                content = await file.read()
+                # Open PDF with PyMuPDF
+                doc = fitz.open(stream=content, filetype="pdf")
+                for page in doc:
+                    context_text += page.get_text() + "\n\n"
+                doc.close()
+            except Exception as e:
+                logger.error(f"Error parsing PDF {file.filename}: {e}")
+
+    # Limit context_text to avoid hitting payload too large errors
+    if len(context_text) > 15000:
+        context_text = context_text[:15000] + "\n...[TRUNCATED]"
+
     session = await service.create_session(
         user_id=current_user.id,
-        topic=request.topic,
-        level=request.level,
-        duration_weeks=request.duration_weeks,
-        hours_per_day=request.hours_per_day,
-        language=request.language,
+        topic=topic,
+        level=level,
+        duration_weeks=duration_weeks,
+        hours_per_day=hours_per_day,
+        language=language,
     )
 
     # Trigger background pipeline via Celery
@@ -98,12 +125,13 @@ async def start_learning_session(
         session_id=str(session.id),
         user_id=str(current_user.id),
         config={
-            "topic": request.topic,
-            "duration_weeks": request.duration_weeks,
-            "level": request.level,
-            "hours_per_day": request.hours_per_day,
-            "language": request.language,
-        },
+            "topic": topic,
+            "level": level,
+            "duration_weeks": duration_weeks,
+            "hours_per_day": hours_per_day,
+            "language": language,
+            "context_text": context_text if context_text else None
+        }
     )
 
     return LearningSessionResponse(
@@ -283,9 +311,15 @@ async def complete_topic(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Learning session not found")
     
-    topic = await service.update_topic_status(topic_id, "completed")
-    if not topic:
+    topic_to_check = await service.get_topic(topic_id)
+    if not topic_to_check:
         raise HTTPException(status_code=404, detail="Topic not found")
+        
+    # Validasi skor kuis minimal 60%
+    if topic_to_check.quiz_score is None or topic_to_check.quiz_score < 0.60:
+        raise HTTPException(status_code=403, detail="Anda harus lulus kuis (minimal 60%) untuk lanjut ke materi berikutnya.")
+        
+    topic = await service.update_topic_status(topic_id, "completed")
     
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
 

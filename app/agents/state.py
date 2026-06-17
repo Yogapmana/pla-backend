@@ -8,6 +8,7 @@ class LearningConfig(BaseModel):
     level: str
     hours_per_day: float
     language: str = "id"
+    context_text: str | None = None
 
 class DaySchedule(BaseModel):
     day: int

@@ -298,16 +298,12 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
 
             await db.commit()
 
-            if action.action in ("repeat", "review", "accelerate"):
-                logger.info(f"[POST-QUIZ-EVAL] Triggering replan for session {session_id} due to action={action.action}")
-                try:
-                    from app.tasks.run_orchestrator import run_replan_task
-                    run_replan_task.delay(session_id, action.action, user_id)
-                except Exception as e:
-                    logger.warning(f"[POST-QUIZ-EVAL] Could not dispatch replan: {e}")
-            else:
-                # "continue" or pass -> just activate next topic and generate module
+            # Always continue to the next topic IF they passed, removing the adaptive replan graph mutation.
+            # The action (repeat, review, etc.) is still saved to the DB for frontend dashboard notifications.
+            if signals.quiz_score is not None and signals.quiz_score >= 0.60:
                 await trigger_next_module_after_quiz(uuid.UUID(session_id), user_id, topic_id, db)
+            else:
+                logger.info(f"[POST-QUIZ-EVAL] Quiz score {signals.quiz_score} < 0.60, holding off on next module.")
                 
             await engine.dispose()
     except Exception as e:

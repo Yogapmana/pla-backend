@@ -16,6 +16,8 @@ Informasi Pembelajaran Pengguna:
 - Jam per hari: {hours_per_day} jam
 - Bahasa: {language}
 
+{context_text_instruction}
+
 Aturan:
 1. Bagi topik ini secara bertahap dari konsep dasar hingga konsep lanjutan (sesuai level).
 2. Tentukan jadwal belajar untuk setiap minggu dan hari (misal jika ada 5 hari belajar efektif seminggu, bagi materinya).
@@ -23,6 +25,7 @@ Aturan:
 4. Estimasi durasi dalam menit per topik harian (total durasi harian tidak boleh melebihi {hours_per_day} jam, atau 60 * {hours_per_day} menit).
 5. KEMBALIKAN OUTPUT DALAM FORMAT JSON SESUAI DENGAN SKEMA YANG DIMINTA.
 6. PENTING: KUNCI JSON (JSON KEYS) HARUS SAMA PERSIS DENGAN SKEMA. JANGAN TERJEMAHKAN KUNCI JSON KE DALAM BAHASA INDONESIA.
+7. KEWAJIBAN MUTLAK: Anda HARUS meng-generate array `weeks` TEPAT SEBANYAK {duration_weeks} minggu. Jika durasi adalah 12 minggu, maka harus ada 12 elemen di dalam `weeks`. Jangan pernah mengurangi atau meringkas jumlah minggu!
 Anda WAJIB mengikuti format JSON persis seperti contoh ini (jangan kurangi atau ubah key-nya):
 ```json
 {{
@@ -65,8 +68,8 @@ def planner_node(state: PLAState) -> PLAState:
         state["agent_logs"] = []
     state["agent_logs"].append(log)
 
-    # Initialize LLM with structured output
-    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2)
+    # Initialize LLM with structured output and large token limit for long curriculums
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, max_tokens=8000)
     from langchain_groq import ChatGroq
     if isinstance(llm, ChatGroq):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
@@ -80,6 +83,10 @@ def planner_node(state: PLAState) -> PLAState:
     
     chain = prompt | structured_llm
     
+    context_text_instruction = ""
+    if config.context_text:
+        context_text_instruction = f"\nDokumen Referensi / Roadmap dari User:\n{config.context_text}\n\nPENTING: Gunakan dokumen referensi/roadmap di atas sebagai acuan utama dalam menyusun urutan, struktur, dan cakupan topik kurikulum.\n"
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -88,7 +95,8 @@ def planner_node(state: PLAState) -> PLAState:
                 "duration_weeks": config.duration_weeks,
                 "level": config.level,
                 "hours_per_day": config.hours_per_day,
-                "language": config.language
+                "language": config.language,
+                "context_text_instruction": context_text_instruction
             })
             
             # Override curriculum_id just in case

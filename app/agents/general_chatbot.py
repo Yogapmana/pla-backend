@@ -196,8 +196,22 @@ async def general_chatbot_chat(
         # We can extract tools used by inspecting the messages list
         tools_used = sum(1 for m in result["messages"] if m.type == "tool")
     except Exception as e:
-        logger.error(f"[GeneralChatbot] Error during agent execution: {e}")
-        final_message = "Maaf, saya mengalami kesalahan saat memproses permintaan Anda. Silakan coba lagi."
+        error_str = str(e)
+        logger.error(f"[GeneralChatbot] Error during agent execution: {error_str}")
+        
+        if "400" in error_str and ("tool_use_failed" in error_str or "failed_generation" in error_str):
+            logger.info("[GeneralChatbot] Groq tool error detected. Falling back to direct LLM call without tools...")
+            try:
+                fallback_llm = get_llm(settings.GENERAL_CHAT_MODEL)
+                # Call LLM directly without binding tools
+                fallback_response = await fallback_llm.ainvoke(messages)
+                final_message = fallback_response.content
+                tools_used = 0
+            except Exception as fallback_e:
+                logger.error(f"[GeneralChatbot] Fallback also failed: {fallback_e}")
+                final_message = "Maaf, saya mengalami kesalahan teknis dari server AI saat memproses. Silakan coba lagi."
+        else:
+            final_message = "Maaf, saya mengalami kesalahan saat memproses permintaan Anda. Silakan coba lagi."
         tools_used = 0
 
     latency_ms = int((time.time() - start_time) * 1000)

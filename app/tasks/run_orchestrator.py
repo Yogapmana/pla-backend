@@ -452,10 +452,10 @@ def run_replan_task(self, session_id: str, action: str, user_id: str):
     phase — it only runs the replan branch.
     """
     from app.db.database import async_sessionmaker, AsyncSession, engine
-    from app.models.learning import Curriculum as DBCurriculum, Topic as DBTopic
+    from app.models.learning import Curriculum as DBCurriculum, Topic as DBTopic, LearningSession as DBLearningSession
     from app.models.agent import AgentLog as DBAgentLog
     from app.agents.orchestrator import build_pla_graph
-    from app.agents.state import PLAState, Curriculum
+    from app.agents.state import PLAState, Curriculum, LearningConfig
     from sqlalchemy import select
 
     async def _run():
@@ -481,11 +481,26 @@ def run_replan_task(self, session_id: str, action: str, user_id: str):
             except Exception as e:
                 return {"status": "parse_error", "error": str(e)}
 
+            session_obj = (await db.execute(
+                select(DBLearningSession).where(DBLearningSession.id == UUID(session_id))
+            )).scalar_one_or_none()
+            if not session_obj:
+                return {"status": "no_session"}
+
+            learning_config = LearningConfig(
+                topic=session_obj.topic,
+                duration_weeks=session_obj.duration_weeks,
+                level=session_obj.level,
+                hours_per_day=session_obj.hours_per_day,
+                language=session_obj.language,
+                files=session_obj.files
+            )
+
             # Build graph, run only replan branch
             state: PLAState = {
                 "user_id": "",
                 "session_id": session_id,
-                "learning_config": None,
+                "learning_config": learning_config,
                 "curriculum": curriculum_obj,
                 "research_results": [],
                 "modules": [],
