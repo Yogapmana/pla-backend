@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from app.db.database import get_db
+from app.dependencies import get_current_user, verify_session_owner, verify_topic_owner
 from app.models.agent import ProgressSignal as DBProgressSignal, QuizResult as DBQuizResult
 from app.models.learning import LearningSession as DBLearningSession, Topic as DBTopic
+from app.models.user import User
 from app.agents.state import ProgressSignals, PLAState
 from app.agents.feedback_engine import run_feedback_loop
 from app.agents.planner import replan_node
@@ -38,33 +40,30 @@ class TopicUnlockStatusResponse(BaseModel):
 
 
 @router.get("/user-metrics/{session_id}", response_model=UserMetricsResponse)
-async def get_user_metrics(session_id: str, db: AsyncSession = Depends(get_db)):
-    session_uuid = uuid.UUID(session_id)
+async def get_user_metrics(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    # Ownership check — raises 404 if missing or owned by another user,
+    # 400 if the id is malformed.
+    session = await verify_session_owner(session_id, current_user, db)
+    session_uuid = session.id
 
-    session_result = await db.execute(
-        select(DBLearningSession).where(DBLearningSession.id == session_uuid)
+    topic_result = await db.execute(
+        select(DBTopic).where(DBTopic.session_id == session_uuid)
     )
-    session = session_result.scalars().first()
+    topic_rows = topic_result.scalars().all()
 
-    topic_rows = []
-    quiz_rows = []
-    learning_rows = []
+    quiz_result = await db.execute(
+        select(DBQuizResult).where(DBQuizResult.session_id == session_uuid)
+    )
+    quiz_rows = quiz_result.scalars().all()
 
-    if session:
-        topic_result = await db.execute(
-            select(DBTopic).where(DBTopic.session_id == session_uuid)
-        )
-        topic_rows = topic_result.scalars().all()
-
-        quiz_result = await db.execute(
-            select(DBQuizResult).where(DBQuizResult.session_id == session_uuid)
-        )
-        quiz_rows = quiz_result.scalars().all()
-
-        learning_result = await db.execute(
-            select(DBLearningSession).where(DBLearningSession.user_id == session.user_id)
-        )
-        learning_rows = learning_result.scalars().all()
+    learning_result = await db.execute(
+        select(DBLearningSession).where(DBLearningSession.user_id == session.user_id)
+    )
+    learning_rows = learning_result.scalars().all()
 
     total_topics = len(topic_rows)
     completed_topics = sum(1 for topic in topic_rows if topic.status == "completed")
@@ -121,12 +120,25 @@ async def get_user_metrics(session_id: str, db: AsyncSession = Depends(get_db)):
     )
 
 @router.post("/signal")
-async def submit_progress_signals(data: SignalSubmit, db: AsyncSession = Depends(get_db)):
+async def submit_progress_signals(
+    data: SignalSubmit,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Simpan satu atau lebih progress signals ke dalam database.
+
+    Ownership is enforced twice: the session must belong to the caller, and
+    the topic must belong to that same session — so a user cannot write
+    signals against another user's (session, topic) pair.
     """
+    session = await verify_session_owner(data.session_id, current_user, db)
+    await verify_topic_owner(
+        data.topic_id, current_user, db, require_session_id=session.id
+    )
+
     signals = []
-    
+
     # helper for mapping
     signal_map = {
         "quiz_score": data.quiz_score,
@@ -135,27 +147,32 @@ async def submit_progress_signals(data: SignalSubmit, db: AsyncSession = Depends
         "self_assessment": data.self_assessment,
         "material_rating": data.material_rating
     }
-    
+
     for key, value in signal_map.items():
         if value is not None:
             new_signal = DBProgressSignal(
                 id=uuid.uuid4(),
-                session_id=uuid.UUID(data.session_id),
+                session_id=session.id,
                 topic_id=data.topic_id,
                 signal_type=key,
                 value=value
             )
             db.add(new_signal)
             signals.append(key)
-            
+
     if not signals:
         raise HTTPException(status_code=400, detail="No signals provided")
-        
+
     await db.commit()
     return {"status": "success", "message": f"Saved signals: {', '.join(signals)}"}
 
 @router.post("/evaluate", response_model=EvaluateResponse)
-async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = Depends(get_db)):
+async def evaluate_feedback(
+    session_id: str,
+    topic_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Trigger Feedback Engine:
     1. Ambil semua progress signals untuk topic_id di session_id.
@@ -164,31 +181,32 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
     4. Simpan MasteryScore ke database.
     5. Panggil replan_node untuk merevisi jadwal.
     """
-    # Ambil sesi untuk mengecek state kurikulum
-    result = await db.execute(select(DBLearningSession).where(DBLearningSession.id == uuid.UUID(session_id)))
-    session = result.scalars().first()
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
+    # Ownership: session + topic must both belong to the caller (and the
+    # topic must be scoped to this session). Guards run before any reads,
+    # replacing the previous soft "if not session" check that leaked the
+    # existence of other users' sessions.
+    session = await verify_session_owner(session_id, current_user, db)
+    session_uuid = session.id
+    await verify_topic_owner(topic_id, current_user, db, require_session_id=session_uuid)
+
     # Ambil sinyal
     signal_result = await db.execute(
         select(DBProgressSignal)
-        .where(DBProgressSignal.session_id == uuid.UUID(session_id))
+        .where(DBProgressSignal.session_id == session_uuid)
         .where(DBProgressSignal.topic_id == topic_id)
     )
     db_signals = signal_result.scalars().all()
-    
+
     if not db_signals:
         # Jika belum ada sinyal, gunakan default atau tolak
         logger = __import__('logging').getLogger(__name__)
         logger.warning(f"No signals found for session {session_id}, topic {topic_id}")
-        
+
     # Agregasi sinyal (ambil nilai terakhir per tipe)
     agg_signals = {}
     for s in db_signals:
         agg_signals[s.signal_type] = s.value
-        
+
     # Bentuk object state
     state_signals = ProgressSignals(
         quiz_score=agg_signals.get("quiz_score"),
@@ -197,14 +215,14 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
         self_assessment=agg_signals.get("self_assessment"),
         material_rating=agg_signals.get("material_rating")
     )
-    
+
     # Jalankan feedback loop murni (tanpa LLM)
     mastery_score, feedback_action = run_feedback_loop(state_signals, topic_id)
-    
+
     # Simpan ke DB (Update Topic)
     topic_result = await db.execute(select(DBTopic).where(DBTopic.id == topic_id))
     db_topic = topic_result.scalars().first()
-    
+
     if db_topic:
         db_topic.mastery_score = mastery_score
         db_topic.quiz_score = state_signals.quiz_score
@@ -213,24 +231,24 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
         db_topic.self_assessment_score = state_signals.self_assessment
         db_topic.material_rating_score = state_signals.material_rating
         db_topic.feedback_action = feedback_action.action
-    
+
     # Lakukan Replanning jika ada kurikulum
     message = "Mastery evaluated. No replanning performed (no existing curriculum)."
-    
+
     from app.models.learning import Curriculum as DBCurriculum
     curr_result = await db.execute(
         select(DBCurriculum)
-        .where(DBCurriculum.session_id == uuid.UUID(session_id))
+        .where(DBCurriculum.session_id == session_uuid)
         .order_by(DBCurriculum.version.desc())
     )
     db_curriculum = curr_result.scalars().first()
-    
+
     if db_curriculum and db_curriculum.curriculum_json:
         try:
             from app.agents.state import Curriculum
             # Rekonstruksi state
             curriculum_obj = Curriculum.model_validate(db_curriculum.curriculum_json)
-            
+
             # Buat dummy state
             state: PLAState = {
                 "user_id": str(session.user_id),
@@ -246,26 +264,26 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
                 "feedback_actions": [feedback_action],
                 "agent_logs": []
             }
-            
+
             # Panggil replan_node
             new_state = replan_node(state)
-            
+
             # Simpan kurikulum yang baru sebagai versi baru
             if new_state["curriculum"]:
                 new_db_curr = DBCurriculum(
                     id=uuid.uuid4(),
-                    session_id=uuid.UUID(session_id),
+                    session_id=session_uuid,
                     version=db_curriculum.version + 1,
                     curriculum_json=new_state["curriculum"].model_dump()
                 )
                 db.add(new_db_curr)
                 message = f"Mastery evaluated. Curriculum revised based on action: {feedback_action.action}"
-                
+
         except Exception as e:
             message = f"Mastery evaluated but replanning failed: {str(e)}"
-            
+
     await db.commit()
-    
+
     return EvaluateResponse(
         mastery_score=mastery_score,
         feedback_action=feedback_action.action,
@@ -276,16 +294,20 @@ async def evaluate_feedback(session_id: str, topic_id: str, db: AsyncSession = D
 async def get_topic_unlock_status(
     session_id: str,
     topic_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Cek apakah topik sudah unlocked berdasarkan nilai kuis minimum 80%.
     """
-    session_uuid = uuid.UUID(session_id)
+    # Ownership: both the session and the (session-scoped) topic must belong
+    # to the caller before we expose quiz results for them.
+    session = await verify_session_owner(session_id, current_user, db)
+    await verify_topic_owner(topic_id, current_user, db, require_session_id=session.id)
 
     result = await db.execute(
         select(DBQuizResult)
-        .where(DBQuizResult.session_id == session_uuid)
+        .where(DBQuizResult.session_id == session.id)
         .where(DBQuizResult.topic_id == topic_id)
         .order_by(DBQuizResult.created_at.desc())
     )

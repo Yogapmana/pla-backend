@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, chat, quiz, progress, learning
+from app.api.v1 import auth, chat, quiz, progress, learning, gamification
 from app.api.v1.websocket import router as ws_router
 from app.api.v1 import curriculum, modules
 
@@ -53,6 +53,13 @@ app.include_router(curriculum.router, prefix="/api/v1", tags=["curriculum"])
 
 # Modules endpoint
 app.include_router(modules.router, prefix="/api/v1", tags=["modules"])
+
+# Gamification endpoints (Streak Heatmap + XP / Leveling)
+app.include_router(
+    gamification.router,
+    prefix="/api/v1/gamification",
+    tags=["gamification"],
+)
 
 
 # WebSocket endpoint for real-time agent log streaming

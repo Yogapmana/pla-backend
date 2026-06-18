@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, verify_session_owner, verify_topic_owner
 from app.models.user import User
 from app.models.agent import QuizResult, ProgressSignal as DBProgressSignal
 from app.models.learning import Topic
@@ -33,7 +33,14 @@ async def get_quiz(
     Returns a quiz_id alongside the questions; clients must send the
     quiz_id back on submit so we can grade against the exact same
     questions (replay-safe, token-efficient).
+
+    The topic must belong to a session owned by the caller — otherwise any
+    authenticated user could generate (and burn LLM tokens on) quizzes for
+    another user's topics.
     """
+    # Ownership: topic must belong to one of the caller's sessions.
+    await verify_topic_owner(topic_id, current_user, db)
+
     questions_data = await tutor_generate_quiz(
         user_id=str(current_user.id),
         topic_id=topic_id,
@@ -79,7 +86,17 @@ async def submit_quiz(
     2. submission.questions_data (back-compat for clients that send it).
     3. Fall back to re-generating via LLM (logged as a warning — only
        happens if the cache expired or the client is missing quiz_id).
+
+    The submitted (session_id, topic_id) pair must belong to the caller.
+    The session ownership and the topic↔session scoping are both verified
+    before grading, so a result cannot be persisted against another user's
+    session/topic.
     """
+    session = await verify_session_owner(submission.session_id, current_user, db)
+    await verify_topic_owner(
+        submission.topic_id, current_user, db, require_session_id=session.id
+    )
+
     quiz_data: list[dict] | None = None
     graded_quiz_id: str | None = None
     cache_hit = False
@@ -279,16 +296,14 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
             action = evaluate_mastery(score, topic_id)
             logger.info(f"[POST-QUIZ-EVAL] {topic_id} mastery={score:.2f} -> {action.action}")
 
-            # Update topic — the `Topic.feedback_action` column
-            # already stores the action.action string, and the
-            # mastery scores are written to their respective
-            # columns. There is no separate `feedback_actions` DB
-            # table in the schema, so we don't try to insert one
-            # here (the previous code imported a non-existent
-            # SQLAlchemy model and crashed silently in the
-            # fire-and-forget task — see the `[POST-QUIZ-EVAL]
-            # Background failed: cannot import name 'FeedbackAction'`
-            # log lines).
+            # Update topic mastery + award XP for any newly-crossed
+            # milestones. This is the SINGLE hook that connects the
+            # 5-signal mastery system to the XP/level gamification —
+            # every signal update eventually flows through here (or
+            # through similar calls if other endpoints also recompute
+            # mastery), so we get full coverage without touching chat
+            # or module endpoints.
+            old_mastery = topic.mastery_score or 0.0
             topic.mastery_score = score
             topic.quiz_score = signals.quiz_score
             topic.reading_time_ratio = signals.reading_time_ratio
@@ -296,6 +311,36 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
             topic.self_assessment_score = signals.self_assessment
             topic.material_rating_score = signals.material_rating
             topic.feedback_action = action.action
+
+            # XP awards — see xp_service.award_mastery_milestone_xp.
+            # Returns a list of awarded events (empty if no new milestones
+            # were crossed or if all crossed milestones were already
+            # earned). The caller (this background task) commits
+            # alongside the mastery update.
+            # NOTE: this background task receives the user_id (str)
+            # not a User ORM object, so we fetch the user row here
+            # to mutate ``total_xp`` in place.
+            from app.models.user import User as _User
+            from app.services.xp_service import award_mastery_milestone_xp
+            _user = (
+                await db.execute(
+                    select(_User).where(_User.id == uuid.UUID(user_id))
+                )
+            ).scalar_one_or_none()
+            xp_awards: list = []
+            if _user is not None:
+                xp_awards = await award_mastery_milestone_xp(
+                    db=db,
+                    user=_user,
+                    topic_id=topic_id,
+                    old_mastery=old_mastery,
+                    new_mastery=score,
+                )
+            if xp_awards:
+                logger.info(
+                    "[POST-QUIZ-EVAL] user=%s topic=%s xp_awards=%s",
+                    user_id, topic_id, xp_awards,
+                )
 
             await db.commit()
 
@@ -332,6 +377,11 @@ async def get_quiz_history(
     The list is sorted by ``created_at DESC`` so the most recent
     attempt is first.
     """
+    # Ownership: the session must belong to the caller before we expose
+    # its quiz history. FastAPI has already coerced the path param to a
+    # UUID; verify_session_owner accepts a UUID directly.
+    await verify_session_owner(session_id, current_user, db)
+
     from sqlalchemy import select
     result = await db.execute(
         select(QuizResult)
@@ -400,6 +450,11 @@ async def get_quiz_history_by_topic(
     to a single topic. The frontend uses this to render the
     "Attempt N of M" progression chart per topic.
     """
+    # Ownership: both the session and the (session-scoped) topic must
+    # belong to the caller.
+    await verify_session_owner(session_id, current_user, db)
+    await verify_topic_owner(topic_id, current_user, db, require_session_id=session_id)
+
     from sqlalchemy import select
     result = await db.execute(
         select(QuizResult)
