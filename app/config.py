@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     TUTOR_MODEL: str = Field(default="gemma4:e4b")
     GENERAL_CHAT_MODEL: str = Field(default="llama-3.3-70b-versatile")
     RAGAS_MODEL: str = Field(default="llama-3.1-8b-instant")
+    MINDMAP_MODEL: str = Field(default="llama-3.3-70b-versatile")
     EMBEDDING_MODEL: str = Field(default="nomic-embed-text")
 
     # Image Generation

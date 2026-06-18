@@ -24,10 +24,11 @@ def youtube_transcript_tool(video_url: str) -> list[dict]:
         else:
             raise ValueError("Invalid YouTube URL")
 
-        transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['id', 'en'])
+        api = YouTubeTranscriptApi()
+        transcript = api.fetch(video_id, languages=['id', 'en'])
         
         # Combine transcript text
-        full_text = " ".join([t['text'] for t in transcript_list])
+        full_text = " ".join([t.text for t in transcript.snippets])
         
         return [{
             "source_type": "youtube",

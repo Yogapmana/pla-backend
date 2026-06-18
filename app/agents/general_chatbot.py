@@ -31,6 +31,7 @@ ATURAN PENTING:
 - Jangan menebak-nebak fakta. Jika Anda tidak tahu atau jika informasi berkaitan dengan peristiwa terkini, GUNAKAN tool pencarian.
 - JIKA Anda menggunakan sumber dari web atau dokumen, selalu cantumkan referensinya dalam jawaban (misal dengan Markdown link).
 - Jika pengguna hanya mengobrol biasa (say hello), Anda tidak perlu memanggil tool. Jawablah secara langsung.
+- PENTING UNTUK TOOLS: Jika Anda ingin memanggil tool, ANDA WAJIB MENGGUNAKAN FUNGSI TOOL-CALLING SECARA NATIVE. Dilarang keras menulis pemanggilan tool dalam bentuk teks markdown (seperti "## Step 1: Execute tool"). Cukup panggil saja fungsinya secara langsung.
 """
 
 def build_agent_tools(user_id: str, session_id: str):
@@ -122,7 +123,7 @@ def build_agent_tools(user_id: str, session_id: str):
         """Extract transcript from a YouTube video URL."""
         await publish_log(session_id, {"type": "tool_start", "agent": "chatbot", "level": "info", "message": f"Membaca transkrip YouTube: {url}"})
         try:
-            results = await asyncio.to_thread(_youtube_tool.invoke, {"url": url})
+            results = await asyncio.to_thread(_youtube_tool.invoke, {"video_url": url})
             if not results:
                 return "Tidak ada transkrip yang ditemukan untuk video tersebut."
             blocks = []
@@ -204,7 +205,8 @@ async def general_chatbot_chat(
             try:
                 fallback_llm = get_llm(settings.GENERAL_CHAT_MODEL)
                 # Call LLM directly without binding tools
-                fallback_response = await fallback_llm.ainvoke(messages)
+                fallback_messages = messages + [SystemMessage(content="PENTING: Tadi Anda gagal memanggil tool karena kendala teknis server. Beritahu pengguna dengan sopan bahwa Anda sedang mengalami kendala teknis dalam mengakses eksternal link/video saat ini. JANGAN menyuruh pengguna menggunakan tool sendiri.")]
+                fallback_response = await fallback_llm.ainvoke(fallback_messages)
                 final_message = fallback_response.content
                 tools_used = 0
             except Exception as fallback_e:

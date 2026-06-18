@@ -165,8 +165,8 @@ async def mindmap_mapper_node(state: PLAState) -> dict:
                 "search_queries": topic["search_queries"]
             })
 
-    model_used = settings.PLANNER_MODEL
-    llm = get_llm(model_used, temperature=0.2, max_tokens=6000)
+    model_used = settings.MINDMAP_MODEL
+    llm = get_llm(model_used, temperature=0.2, max_tokens=3000)
     
     from langchain_groq import ChatGroq
     if isinstance(llm, ChatGroq):

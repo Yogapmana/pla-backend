@@ -33,8 +33,10 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
             **kwargs
         )
     else:
+        # Pass a large num_ctx so Ollama doesn't truncate the prompt
         return ChatOllama(
             base_url=settings.OLLAMA_BASE_URL,
             model=model_name,
+            num_ctx=32768,
             **kwargs
         )

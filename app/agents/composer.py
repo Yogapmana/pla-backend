@@ -71,14 +71,14 @@ def composer_node(state: PLAState) -> PLAState:
     # Format sources — separate embeddable content from course links
     sources_text = ""
     courses_text = ""
-    max_total_chars = 15000  # Strict limit to prevent Groq 413 Payload Too Large (approx 3-4k tokens)
+    max_total_chars = 40000  # Long limit since we are using local Ollama (gemma4:12b)
     current_chars = 0
+    courses_count = 0
 
     for idx, r in enumerate(research_results):
         if getattr(r, "embed_mode", True) and r.raw_text:
             if current_chars >= max_total_chars:
-                # If we've hit the strict limit, only add metadata, no full text
-                sources_text += f"Sumber [{idx + 1}] ({r.source_type}): {r.source_title}\nURL: {r.source_url}\nKonten: (Konteks dipotong karena batas ukuran)\n\n"
+                # Stop adding sources entirely to save tokens
                 continue
                 
             remaining_chars = max_total_chars - current_chars
@@ -88,14 +88,16 @@ def composer_node(state: PLAState) -> PLAState:
             sources_text += added_text
             current_chars += len(added_text)
         elif not getattr(r, "embed_mode", True) and getattr(r, "course_metadata", None):
+            if courses_count >= 10: # Increased limit for courses
+                continue
             cm = r.course_metadata
-            courses_text += f"Kursus: {cm.title}\nPlatform: {cm.platform}\nURL: {cm.url}\nHarga: {cm.price_type}\nDeskripsi: {cm.description}\n\n"
+            courses_text += f"Kursus: {cm.title}\nPlatform: {cm.platform}\nURL: {cm.url}\nHarga: {cm.price_type}\nDeskripsi: {cm.description[:500]}\n\n"
+            courses_count += 1
 
     if not courses_text:
         courses_text = "(Tidak ada rekomendasi kursus yang ditemukan untuk topik ini.)"
 
-    llm = get_llm(settings.COMPOSER_MODEL, temperature=0.3)
-
+    llm = get_llm(settings.COMPOSER_MODEL, temperature=0.3, max_tokens=2500)
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", COMPOSER_PROMPT),

@@ -4,6 +4,9 @@ from app.agents.state import PLAState, Curriculum, AgentLog
 from app.config import settings
 from app.utils.llm_factory import get_llm
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 PLANNER_PROMPT = """
 Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
@@ -69,7 +72,7 @@ def planner_node(state: PLAState) -> PLAState:
     state["agent_logs"].append(log)
 
     # Initialize LLM with structured output and large token limit for long curriculums
-    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, max_tokens=8000)
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, max_tokens=4000)
     from langchain_groq import ChatGroq
     if isinstance(llm, ChatGroq):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
@@ -103,12 +106,11 @@ def planner_node(state: PLAState) -> PLAState:
             if not curriculum.curriculum_id or curriculum.curriculum_id == "uuid":
                 curriculum.curriculum_id = str(uuid.uuid4())
                 
-            # Make topic_ids globally unique to avoid Postgres PK collisions
+            # Make topic_ids globally unique and immune to LLM hallucination collisions
             short_session = str(state["session_id"]).split("-")[0]
             for week in curriculum.weeks:
                 for day in week.days:
-                    if short_session not in day.topic_id:
-                        day.topic_id = f"{short_session}-{day.topic_id}"
+                    day.topic_id = f"{short_session}-W{week.week}D{day.day}"
                 
             state["curriculum"] = curriculum
             

@@ -254,11 +254,12 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
                 logger.warning(f"[POST-QUIZ-EVAL] Topic {topic_id} not found")
                 return
 
-            # Fetch all signals
+            # Fetch all signals, ordered by created_at asc so newest overwrites oldest
             signal_result = await db.execute(
                 select(ProgressSignal)
                 .where(ProgressSignal.session_id == uuid.UUID(session_id))
                 .where(ProgressSignal.topic_id == topic_id)
+                .order_by(ProgressSignal.created_at.asc())
             )
             db_signals = signal_result.scalars().all()
 

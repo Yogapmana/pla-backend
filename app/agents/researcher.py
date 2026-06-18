@@ -121,7 +121,7 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
     tavily_urls = [item["source_url"] for item in tavily_results if item.get("source_url")]
     if tavily_urls:
         try:
-            jina_results = await jina_read_urls(tavily_urls[:5], timeout=20)
+            jina_results = await jina_read_urls(tavily_urls[:6], timeout=20)
             for jina_res in jina_results:
                 raw_text = jina_res.get("text", "")
                 if jina_res.get("success") and is_valid_content(raw_text):
