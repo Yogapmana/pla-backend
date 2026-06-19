@@ -278,6 +278,41 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
         # Release all pool connections associated with this event loop before it closes
         await engine.dispose()
 
+        # NEW (NotebookLM-style mindmap): when the orchestrator
+        # successfully produces modules AND marks the session as
+        # "ready" (the user is about to be allowed into the
+        # dashboard), kick off the background task that scrapes
+        # 1-2 sources per topic and builds the 3-level mindmap.
+        #
+        # Why here, not in `generate_module_for_topic`:
+        # The FIRST module is generated synchronously inside the
+        # orchestrator's composer_node and saved at the top of
+        # this function (line ~187) — ``generate_module_for_topic``
+        # is only invoked later, AFTER a quiz submit, for topic 2+.
+        # So the trigger that lives in that task never sees the
+        # first module. We trigger here instead, exactly at the
+        # moment the user is unblocked into the dashboard.
+        #
+        # Failure is non-fatal: if the broker is down or the task
+        # is not registered, the user still has the v1 mindmap
+        # (titles-only) as fallback. We log and move on.
+        if curriculum is not None and final_state.get("modules"):
+            try:
+                from app.tasks.generate_enhanced_mindmap import (
+                    generate_enhanced_mindmap,
+                )
+                generate_enhanced_mindmap.delay(session_id)
+                logger.info(
+                    "[RUN-ORCHESTRATOR] First module saved & session "
+                    "ready — queued enhanced mindmap for session %s",
+                    session_id,
+                )
+            except Exception as _trigger_exc:
+                logger.warning(
+                    "[RUN-ORCHESTRATOR] Failed to queue enhanced "
+                    "mindmap task: %s", _trigger_exc,
+                )
+
         return {
             "session_id": session_id,
             "curriculum_generated": curriculum is not None,

@@ -27,6 +27,7 @@ class Curriculum(Base):
     curriculum_json = Column(JSONB, nullable=False)
     mindmap_json = Column(JSONB, nullable=True)  # Cached AI-generated Mermaid mind map
     concept_graph_json = Column(JSONB, nullable=True)  # Cached concept graph (root → clusters → concepts → topics → resources)
+    enhanced_mindmap_json = Column(JSONB, nullable=True) # NotebookLM-style enhanced mindmap
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class Topic(Base):

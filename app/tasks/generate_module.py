@@ -163,7 +163,54 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
                 "message": f"Module '{generated_module.title}' ready for topic {topic_id}.",
                 "metadata": {"module_id": str(module_rec.id)},
             })
-            
+
+            # NEW (NotebookLM-style mindmap): when the FIRST module
+            # for this session finishes composing, queue the
+            # enhanced-mindmap Celery task. This task runs in the
+            # background:
+            #   1. lightweight_researcher  (1-2 sources per topic)
+            #   2. mindmap_v2_mapper       (3-level LLM output)
+            #   3. save to curriculum.enhanced_mindmap_json
+            # and pushes a "mindmap_enhanced" WebSocket event when
+            # done so any open Curriculum page can refresh.
+            #
+            # The user is already allowed to enter the dashboard at
+            # this point (SessionGuard transitions processing→ready
+            # on the first module), so this task runs in parallel
+            # with the user's exploration. By the time they look
+            # at the Curriculum page, the enhanced mindmap is
+            # usually ready.
+            #
+            # We check the module count AFTER the commit so we know
+            # this is a freshly-saved module. ``count == 1`` is the
+            # first-module trigger; later modules don't re-trigger.
+            from sqlalchemy import select, func
+            count_stmt = select(func.count(DBLearningModule.id)).where(
+                DBLearningModule.session_id == session_uuid
+            )
+            total_modules = (await db.execute(count_stmt)).scalar_one()
+            if total_modules == 1:
+                try:
+                    from app.tasks.generate_enhanced_mindmap import (
+                        generate_enhanced_mindmap,
+                    )
+                    generate_enhanced_mindmap.delay(session_id)
+                    logger.info(
+                        "[GENERATE-MODULE] First module done — "
+                        "queued enhanced mindmap task for session %s",
+                        session_id,
+                    )
+                except Exception as _trigger_exc:
+                    # If broker is down or the task isn't registered
+                    # yet, the user just won't get the enhanced
+                    # mindmap — they fall back to the v1 one. Log
+                    # and move on; never fail module generation
+                    # over a side-effect trigger.
+                    logger.warning(
+                        "[GENERATE-MODULE] Failed to queue enhanced "
+                        "mindmap task: %s", _trigger_exc,
+                    )
+
             return {
                 "status": "success",
                 "module_id": str(module_rec.id),

@@ -3,7 +3,6 @@ from app.agents.state import PLAState
 from app.agents.planner import planner_node, replan_node
 from app.agents.researcher import researcher_node
 from app.agents.composer import composer_node
-from app.agents.mindmap_mapper import mindmap_mapper_node
 
 
 def _should_replan(state: PLAState) -> str:
@@ -41,6 +40,29 @@ def build_pla_graph():
     - Initial run: feedback_actions is empty → composer → END
     - Resume run after evaluate endpoint populated feedback_actions:
         composer → replan (only for repeat/review/accelerate) → END
+
+    Note on the mindmap
+    -------------------
+    Earlier versions of this graph had a parallel ``mindmap_mapper``
+    branch that ran right after the planner. That node only had the
+    topic TITLES to work with (the researcher hadn't fetched
+    anything yet), so the output was shallow — a flat list of
+    concepts with 1-4-word labels. The mindmap was visible early
+    but low quality.
+
+    The current pipeline does NOT generate the mindmap here. Instead,
+    a separate background Celery task
+    (``app.tasks.generate_enhanced_mindmap``) runs LATER — right
+    after the first module is composed — once the lightweight
+    researcher has scraped 1-2 real sources per topic. The output
+    is a 3-level NotebookLM-style structure (theme → concept →
+    key_point) saved to ``curriculum.enhanced_mindmap_json``.
+
+    The user experience: they can enter the dashboard as soon as
+    module 1 is ready, and the enhanced mindmap arrives a few
+    seconds later while they're already exploring. By the time
+    they look at the Curriculum page, the new mindmap is usually
+    visible.
     """
     builder = StateGraph(PLAState)
 
@@ -49,16 +71,9 @@ def build_pla_graph():
     builder.add_node("researcher", researcher_node)
     builder.add_node("composer", composer_node)
     builder.add_node("replan", replan_node)
-    builder.add_node("mindmap_mapper", mindmap_mapper_node)
 
     # Linear edges for the generation pipeline
     builder.add_edge(START, "planner")
-    
-    # Parallel branch for mindmap generation (background task)
-    builder.add_edge("planner", "mindmap_mapper")
-    builder.add_edge("mindmap_mapper", END)
-    
-    # Main path continues
     builder.add_edge("planner", "researcher")
     builder.add_edge("researcher", "composer")
 

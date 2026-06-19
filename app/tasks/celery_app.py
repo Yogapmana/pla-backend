@@ -12,6 +12,7 @@ celery_app = Celery(
         "app.tasks.run_researcher",
         "app.tasks.run_composer",
         "app.tasks.generate_module",
+        "app.tasks.generate_enhanced_mindmap",
     ],
 )
 
