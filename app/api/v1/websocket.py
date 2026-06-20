@@ -95,7 +95,7 @@ async def agent_log_stream(
     # pushes it to every WebSocket subscribed to this session_id in this
     # process. This is safe to call concurrently from the broker task.
     async def forward_log(payload: dict) -> None:
-        await manager.broadcast(session_id, payload)
+        await websocket.send_json(payload)
 
     subscriber_task: asyncio.Task | None = None
     try:

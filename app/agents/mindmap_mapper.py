@@ -478,30 +478,65 @@ async def mindmap_v2_mapper(
 
     llm = get_llm(model_used, temperature=0.3, max_tokens=6000)
     from langchain_groq import ChatGroq
-    if isinstance(llm, ChatGroq):
+    from langchain_core.output_parsers import JsonOutputParser
+
+    is_groq = isinstance(llm, ChatGroq)
+    structured_llm = None
+    parser = None
+    
+    if is_groq:
         structured_llm = llm.with_structured_output(
             EnhancedMindmap, method="json_mode"
         )
     else:
-        structured_llm = llm.with_structured_output(EnhancedMindmap)
+        parser = JsonOutputParser(pydantic_object=EnhancedMindmap)
 
     logger.info(
         "[MINDMAP-V2] invoking %s with %d topics, %d chars research context",
         model_used, len(topics_summary), len(research_json),
     )
 
-    raw = await structured_llm.ainvoke([
-        SystemMessage(
-            content=(
+    max_retries = 3
+    result: EnhancedMindmap | None = None
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            sys_msg = (
                 "You are a curriculum concept-mapping assistant. You produce "
                 "NotebookLM-style 3-level mindmaps from research text. "
                 "Output ONLY the structured JSON, no commentary."
             )
-        ),
-        HumanMessage(content=prompt),
-    ])
+            
+            if parser and not is_groq:
+                sys_msg += "\n\n" + parser.get_format_instructions()
+                
+            messages = [
+                SystemMessage(content=sys_msg),
+                HumanMessage(content=prompt),
+            ]
+            
+            if is_groq:
+                raw = await structured_llm.ainvoke(messages)
+                result = raw
+            else:
+                import re
+                raw_response = await llm.ainvoke(messages)
+                content = raw_response.content
+                # Fix common Gemma hallucination: `- "key":` inside JSON
+                content = re.sub(r'^\s*-\s*(["\'])', r'\1', content, flags=re.MULTILINE)
+                parsed_dict = parser.parse(content)
+                result = EnhancedMindmap(**parsed_dict)
+                
+            break
+            
+        except Exception as e:
+            last_error = e
+            logger.warning(f"[MINDMAP-V2] Attempt {attempt + 1}/{max_retries} failed for {model_used}: {e}")
+            
+    if result is None:
+        raise ValueError(f"LLM failed to generate valid mindmap after {max_retries} attempts. Last error: {last_error}")
 
-    result: EnhancedMindmap = raw
     elapsed = round(time.monotonic() - started, 2)
 
     # Sanity: if the LLM returned 0 themes, something went wrong

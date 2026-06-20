@@ -59,6 +59,8 @@ logger = logging.getLogger(__name__)
     bind=True,
     max_retries=2,
     default_retry_delay=30,
+    soft_time_limit=1800,  # 30 minutes
+    time_limit=1860,       # 31 minutes
     name="app.tasks.generate_enhanced_mindmap.generate_enhanced_mindmap",
 )
 def generate_enhanced_mindmap(self, session_id: str):
