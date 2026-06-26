@@ -31,6 +31,8 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
     This runs the researcher → composer → indexer pipeline for a single topic.
     """
     async def _run():
+        # Clear inherited connections attached to different event loops
+        await engine.dispose()
         async with AsyncSession(engine) as db:
             service = LearningService(db)
             
