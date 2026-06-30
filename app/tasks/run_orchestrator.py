@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 from app.tasks.celery_app import celery_app
 from app.config import settings
 from app.agents.orchestrator import build_pla_graph
-from app.agents.state import PLAState, LearningConfig, AgentLog
+from app.agents.state import SynapsaState, LearningConfig, AgentLog
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool
 
@@ -17,7 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 @celery_app.task(bind=True)
 def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
     """
-    Celery task: run full PLA pipeline (planner → researcher → composer).
+    Celery task: run full Synapsa pipeline (planner → researcher → composer).
     Saves curriculum, topics, and modules to DB after completion.
     """
     from app.db.database import async_sessionmaker, AsyncSession, engine
@@ -68,7 +68,7 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
             language=config.get("language", "id"),
         )
 
-        initial_state: PLAState = {
+        initial_state: SynapsaState = {
             "user_id": user_id,
             "session_id": session_id,
             "learning_config": learning_config,
@@ -330,7 +330,7 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
 @celery_app.task(bind=True)
 def resume_learning_pipeline(self, session_id: str):
     """
-    Celery task: resume the PLA pipeline after user approval.
+    Celery task: resume the Synapsa pipeline after user approval.
     """
     from app.db.database import async_sessionmaker, AsyncSession, engine
     from app.models.learning import LearningSession, LearningModule, ResourceLink
@@ -490,7 +490,7 @@ def run_replan_task(self, session_id: str, action: str, user_id: str):
     from app.models.learning import Curriculum as DBCurriculum, Topic as DBTopic, LearningSession as DBLearningSession
     from app.models.agent import AgentLog as DBAgentLog
     from app.agents.orchestrator import build_pla_graph
-    from app.agents.state import PLAState, Curriculum, LearningConfig
+    from app.agents.state import SynapsaState, Curriculum, LearningConfig
     from sqlalchemy import select
 
     async def _run():
@@ -532,7 +532,7 @@ def run_replan_task(self, session_id: str, action: str, user_id: str):
             )
 
             # Build graph, run only replan branch
-            state: PLAState = {
+            state: SynapsaState = {
                 "user_id": "",
                 "session_id": session_id,
                 "learning_config": learning_config,
@@ -613,7 +613,7 @@ def run_replan_task(self, session_id: str, action: str, user_id: str):
                     from app.tasks.generate_module import generate_module_for_topic
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.info(f"[REPLAN] Triggering module generation for adapted topic: {new_topic_id}")
+                    logger.info(f"[RESynapsaN] Triggering module generation for adapted topic: {new_topic_id}")
                     generate_module_for_topic.delay(
                         session_id=session_id,
                         user_id=user_id,

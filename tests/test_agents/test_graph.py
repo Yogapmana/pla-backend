@@ -5,7 +5,7 @@ from app.agents.orchestrator import build_pla_graph
 from app.agents.state import LearningConfig
 
 async def main():
-    print("Initializing test PLA session...")
+    print("Initializing test Synapsa session...")
     
     # Initialize basic state
     initial_state = {

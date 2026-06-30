@@ -7,7 +7,7 @@ Verifies:
 """
 import pytest
 from app.agents.orchestrator import build_pla_graph, _should_replan
-from app.agents.state import PLAState, FeedbackAction, Curriculum, LearningConfig
+from app.agents.state import SynapsaState, FeedbackAction, Curriculum, LearningConfig
 
 
 def test_graph_compiles_with_all_nodes():
@@ -26,7 +26,7 @@ def test_graph_compiles_with_all_nodes():
 
 def test_should_replan_no_feedback():
     """Empty feedback_actions → end (no replan)."""
-    state: PLAState = {
+    state: SynapsaState = {
         "user_id": "u1",
         "session_id": "s1",
         "learning_config": None,
@@ -45,7 +45,7 @@ def test_should_replan_no_feedback():
 
 def test_should_replan_continue_action():
     """'continue' action → end (user mastered topic, no revision needed)."""
-    state: PLAState = {
+    state: SynapsaState = {
         "user_id": "u1",
         "session_id": "s1",
         "learning_config": None,
@@ -65,7 +65,7 @@ def test_should_replan_continue_action():
 @pytest.mark.parametrize("action", ["repeat", "review", "accelerate"])
 def test_should_replan_revision_actions(action):
     """repeat/review/accelerate → replan (curriculum revision needed)."""
-    state: PLAState = {
+    state: SynapsaState = {
         "user_id": "u1",
         "session_id": "s1",
         "learning_config": None,
@@ -84,7 +84,7 @@ def test_should_replan_revision_actions(action):
 
 def test_should_replan_uses_latest_action():
     """When multiple feedback actions exist, only the latest one matters."""
-    state: PLAState = {
+    state: SynapsaState = {
         "user_id": "u1",
         "session_id": "s1",
         "learning_config": None,

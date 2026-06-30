@@ -77,7 +77,7 @@ class MindmapLLMResult(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-MINDMAP_PROMPT_TEMPLATE = """Anda adalah AI yang membantu membuat peta konsep (mind map) dari sebuah kurikulum pembelajaran.
+MINDMAP_PROMPT_TEMSynapsaTE = """Anda adalah AI yang membantu membuat peta konsep (mind map) dari sebuah kurikulum pembelajaran.
 
 Tugas: Mengubah daftar topik kurikulum di bawah ini menjadi sebuah diagram Mermaid ``mindmap`` yang rapi.
 
@@ -195,7 +195,7 @@ class MindmapService:
         # Try LLM first
         llm_result: dict | None = None
         llm_was_called = False
-        model_name = settings.PLANNER_MODEL
+        model_name = settings.SynapsaNNER_MODEL
         try:
             llm_result = await self._call_llm(
                 course_title=course_title,
@@ -255,7 +255,7 @@ class MindmapService:
         llm = get_llm(model_name, temperature=0.2, max_tokens=2000)
         structured_llm = llm.with_structured_output(MindmapLLMResult)
 
-        prompt = MINDMAP_PROMPT_TEMPLATE.format(
+        prompt = MINDMAP_PROMPT_TEMSynapsaTE.format(
             course_title=course_title,
             level=level,
             language=language,

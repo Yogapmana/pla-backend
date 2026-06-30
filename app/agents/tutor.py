@@ -3,18 +3,23 @@ import logging
 import time
 from datetime import datetime
 
-from app.agents.state import PLAState
+from app.agents.state import SynapsaState
 from app.config import settings
 from app.rag.retriever import retrieve_and_rerank
 from app.utils.llm_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
-TUTOR_SYSTEM_PROMPT = """Kamu adalah Tutor AI yang membantu pengguna memahami materi pembelajaran.
-Gunakan konteks yang disediakan untuk menjawab pertanyaan secara akurat.
-Jawab dalam Bahasa Indonesia yang jelas dan mudah dipahami.
-Jika konteks tidak cukup, katakan dengan jujur bahwa kamu tidak memiliki informasi yang cukup.
-Selalu sertakan referensi sumber jika relevan."""
+TUTOR_SYSTEM_PROMPT = """Kamu adalah Tutor AI interaktif dan suportif yang bertugas membantu pengguna memahami materi pembelajaran.
+Gunakan konteks (modul) yang disediakan sebagai dasar utama atau titik awal, namun kamu SANGAT DIANJURKAN untuk:
+1. Memberikan penjelasan yang lebih mendalam, contoh dunia nyata, dan analogi yang mudah dipahami.
+2. Mengembangkan jawaban dengan pengetahuan umummu jika itu dapat membantu pengguna memahami konsep secara lebih baik.
+3. Bersikap membimbing, bukan hanya membacakan teks. Jelaskan 'mengapa' dan 'bagaimana' di balik suatu konsep.
+4. Menjawab dalam bahasa: {language}.
+
+PENTING: JIKA PENGGUNA BERTANYA TENTANG TOPIK YANG SAMA SEKALI TIDAK BERHUBUNGAN DENGAN MATERI MODUL, TOLAK DENGAN SOPAN DAN ARAHKAN MEREKA KEMBALI KE TOPIK PEMBELAJARAN (Contoh: "Maaf, pertanyaan tersebut di luar topik modul ini. Mari kita kembali fokus belajar tentang [Topik Modul]").
+
+Jika kamu menggunakan informasi spesifik dari konteks, kamu bisa menyertakan referensinya. Namun pastikan gaya bahasamu tetap natural dan mengalir layaknya guru profesional."""
 
 
 def _build_context_block(chunks: list[dict]) -> str:
@@ -46,6 +51,7 @@ async def tutor_chat(
     session_id: str,
     topic_id: str,
     query: str,
+    language: str = "id",
     chat_history: list[dict] | None = None,
     include_sources: bool = True,
 ) -> dict:
@@ -77,7 +83,7 @@ async def tutor_chat(
     history_str = _format_chat_history(chat_history)
 
     prompt_parts = [
-        TUTOR_SYSTEM_PROMPT,
+        TUTOR_SYSTEM_PROMPT.format(language=language),
         f"\n\n## Konteks Materi:\n{context_block}",
     ]
     if history_str:
@@ -126,7 +132,9 @@ async def tutor_generate_quiz(
     user_id: str,
     topic_id: str,
     topic_title: str,
+    language: str = "id",
     num_questions: int = 5,
+    difficulty: str = "menengah",
 ) -> list[dict]:
     """
     Quiz Generation Mode:
@@ -141,7 +149,7 @@ async def tutor_generate_quiz(
     history.
     """
     logger.info(
-        f"[TUTOR] Generating {num_questions} quiz questions for '{topic_title}'..."
+        f"[TUTOR] Generating {num_questions} quiz questions (Difficulty: {difficulty}) for '{topic_title}'..."
     )
 
     # Get context from Qdrant
@@ -155,7 +163,15 @@ async def tutor_generate_quiz(
     )
     context = _build_context_block(chunks)
 
-    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ), Benar/Salah.
+    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ), Benar/Salah secara ACAK.
+TULIS KESELURUHAN SOAL DAN JAWABAN DALAM BAHASA: {language}.
+
+TINGKAT KESULITAN SOAL: {difficulty}
+(Jika mudah: fokus pada definisi dasar. Jika menengah: fokus pada pemahaman konsep. Jika sulit: fokus pada analisis, studi kasus, atau logika tingkat tinggi).
+
+PENTING UNTUK VARIASI: 
+- Acak konsep yang kamu pilih dari materi (jangan hanya fokus pada paragraf pertama).
+- Buat soal yang berbeda dari yang biasanya kamu hasilkan agar pengguna tidak bosan saat mengulang kuis.
 
 MATERI:
 {context}

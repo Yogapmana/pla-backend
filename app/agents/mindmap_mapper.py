@@ -3,7 +3,7 @@
 This module owns both mindmap-generation agents. They are kept in
 the same file because they share the same input shape (a
 ``Curriculum``) and the same output destination (``curriculum`` row),
-and we want a single place to look for "how does PLA build a
+and we want a single place to look for "how does Synapsa build a
 mindmap?".
 
 v1: ``mindmap_mapper_node`` — runs right after the planner with
@@ -31,7 +31,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.config import settings
 from app.utils.llm_factory import get_llm
-from app.agents.state import PLAState
+from app.agents.state import SynapsaState
 from app.services.learning_service import LearningService
 from app.db.database import SessionLocal
 
@@ -301,7 +301,7 @@ Kembalikan JSON valid dengan struktur berikut:
 # v1 node — kept unchanged
 # ════════════════════════════════════════════════════════════════════════
 
-async def mindmap_mapper_node(state: PLAState) -> dict:
+async def mindmap_mapper_node(state: SynapsaState) -> dict:
     """v1: titles-only concept graph (used at pipeline time)."""
     logger.info("[MINDMAP_MAPPER] v1 starting...")
 

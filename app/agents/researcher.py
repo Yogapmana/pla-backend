@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List
-from app.agents.state import PLAState, RawContent, CourseLink, AgentLog
+from app.agents.state import SynapsaState, RawContent, CourseLink, AgentLog
 from app.tools.tavily_search import tavily_search_tool
 from app.tools.wikipedia_search import wikipedia_search_tool
 from app.tools.arxiv_search import arxiv_search_tool
@@ -162,7 +162,7 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
     return raw_contents
 
 
-async def researcher_node(state: PLAState) -> PLAState:
+async def researcher_node(state: SynapsaState) -> SynapsaState:
     curriculum = state.get("curriculum")
     if not curriculum:
         return {}

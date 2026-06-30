@@ -1,11 +1,11 @@
 from langgraph.graph import StateGraph, START, END
-from app.agents.state import PLAState
+from app.agents.state import SynapsaState
 from app.agents.planner import planner_node, replan_node
 from app.agents.researcher import researcher_node
 from app.agents.composer import composer_node
 
 
-def _should_replan(state: PLAState) -> str:
+def _should_replan(state: SynapsaState) -> str:
     """
     Conditional edge after composer: invoke replan only when feedback has
     been recorded AND the action requires curriculum revision.
@@ -30,7 +30,7 @@ def _should_replan(state: PLAState) -> str:
 
 def build_pla_graph():
     """
-    Build the PLA LangGraph StateGraph.
+    Build the Synapsa LangGraph StateGraph.
 
     Flow:
         START → planner → researcher → composer → (should_replan?)
@@ -64,7 +64,7 @@ def build_pla_graph():
     they look at the Curriculum page, the new mindmap is usually
     visible.
     """
-    builder = StateGraph(PLAState)
+    builder = StateGraph(SynapsaState)
 
     # Nodes
     builder.add_node("planner", planner_node)

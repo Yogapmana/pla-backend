@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 
-from app.agents.state import AgentLog, LearningModule, PLAState
+from app.agents.state import AgentLog, LearningModule, SynapsaState
 from app.config import settings
 from app.utils.llm_factory import get_llm
 from langchain_core.output_parsers import StrOutputParser
@@ -30,10 +30,11 @@ ATURAN PENULISAN DAN STRUKTUR MODUL:
 PENTING:
 - Keluarkan HANYA teks Markdown murni tanpa basa-basi (jangan gunakan kalimat "Berikut adalah...").
 - Sesuaikan tingkat kedalaman materi untuk level: {level}.
+- TULIS KESELURUHAN ISI MODUL (termasuk judul, subjudul, dan teks) DALAM BAHASA: {language}.
 """
 
 
-def composer_node(state: PLAState) -> PLAState:
+def composer_node(state: SynapsaState) -> SynapsaState:
     curriculum = state.get("curriculum")
     research_results = state.get("research_results", [])
     config = state.get("learning_config")
@@ -112,6 +113,7 @@ def composer_node(state: PLAState) -> PLAState:
             {
                 "topic_title": topic_title,
                 "level": config.level if config else "umum",
+                "language": config.language if config else "id",
                 "sources_text": sources_text,
                 "courses_text": courses_text,
                 "image_model": settings.IMAGE_MODEL,

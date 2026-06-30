@@ -1,4 +1,4 @@
-# Personal Learning Agent (PLA) System
+# Personal Learning Agent (Synapsa) System
 
 A multi-agent RAG-based adaptive learning platform that operates as a "private tutoring team." Given a topic and duration, the system autonomously designs a personalized curriculum, gathers materials from the internet, synthesizes them into structured learning modules, and adapts the learning path in real-time based on multi-signal performance feedback.
 
@@ -11,7 +11,7 @@ Built for undergraduate thesis (Skripsi S1).
 The system uses **LangGraph** to orchestrate five specialized agents in a pipeline:
 
 ```
-[START] → [PLANNER] → [RESEARCHER] → [COMPOSER] → [TUTOR + FEEDBACK] → [END]
+[START] → [SynapsaNNER] → [RESEARCHER] → [COMPOSER] → [TUTOR + FEEDBACK] → [END]
                         ↑
                     ┌──[FEEDBACK ENGINE]──┘
 ```
@@ -152,7 +152,7 @@ docker compose up --build
 ## Project Structure
 
 ```
-pla-backend/
+synapsa-backend/
 ├── app/
 │   ├── main.py                    # FastAPI entry point
 │   ├── config.py                  # Settings from environment
@@ -171,7 +171,7 @@ pla-backend/
 │   │   ├── composer.py            # Module synthesis + RAG indexing
 │   │   ├── tutor.py               # RAG chat + quiz generation
 │   │   ├── feedback_engine.py     # Mastery calculation + revision logic
-│   │   └── state.py               # PLAState TypedDict + models
+│   │   └── state.py               # SynapsaState TypedDict + models
 │   ├── rag/
 │   │   ├── indexer.py             # Chunk → embed → Qdrant pipeline
 │   │   ├── retriever.py           # HyDE + dual embedding + FlashRank
@@ -208,7 +208,7 @@ pla-backend/
 
 ## Models
 
-PLA uses two databases:
+Synapsa uses two databases:
 
 **PostgreSQL** — Sessions, curricula, topics, modules, chat history, quiz results, progress signals, mastery scores, agent logs, UX surveys.
 

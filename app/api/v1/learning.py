@@ -87,7 +87,7 @@ async def start_learning_session(
 ):
     """
     Start a new learning session.
-    Creates a LearningSession in DB and triggers the PLA pipeline
+    Creates a LearningSession in DB and triggers the Synapsa pipeline
     (Planner → Researcher → Composer) as a Celery background task.
     """
     service = LearningService(db)

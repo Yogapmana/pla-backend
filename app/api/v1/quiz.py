@@ -1,4 +1,5 @@
 import uuid
+import random
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
@@ -39,14 +40,35 @@ async def get_quiz(
     another user's topics.
     """
     # Ownership: topic must belong to one of the caller's sessions.
-    await verify_topic_owner(topic_id, current_user, db)
+    topic = await verify_topic_owner(topic_id, current_user, db)
+    session = await verify_session_owner(topic.session_id, current_user, db)
+
+    # Dynamic difficulty and question count based on mastery_score
+    mastery = topic.mastery_score or 0.0
+    
+    # If the client explicitly sends a num_questions, we still respect it (or we can override).
+    # Since we want it fully dynamic for the quiz flow, we'll calculate it if num_questions <= 5 (default).
+    if mastery < 0.4:
+        dynamic_num = 5
+        difficulty = "mudah"
+    elif mastery < 0.7:
+        dynamic_num = 10
+        difficulty = "menengah"
+    else:
+        dynamic_num = 20
+        difficulty = "sulit"
 
     questions_data = await tutor_generate_quiz(
         user_id=str(current_user.id),
         topic_id=topic_id,
         topic_title=topic_id.replace("_", " ").title(),
-        num_questions=num_questions,
+        language=session.language,
+        num_questions=dynamic_num,
+        difficulty=difficulty,
     )
+
+    if questions_data:
+        random.shuffle(questions_data)
 
     if not questions_data:
         raise HTTPException(

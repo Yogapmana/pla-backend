@@ -22,7 +22,7 @@ sys.path.insert(0, '.')
 from app.services.mindmap_service import (
     MindmapService,
     MindmapLLMResult,
-    MINDMAP_PROMPT_TEMPLATE,
+    MINDMAP_PROMPT_TEMSynapsaTE,
 )
 
 
@@ -271,7 +271,7 @@ def test_get_or_generate_returns_none_when_no_curriculum():
 
 def test_prompt_template_substitutes_all_vars():
     """The prompt must include all placeholders correctly."""
-    msg = MINDMAP_PROMPT_TEMPLATE.format(
+    msg = MINDMAP_PROMPT_TEMSynapsaTE.format(
         course_title="Python",
         level="beginner",
         language="id",

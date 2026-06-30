@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Personal Learning Agent API",
-    description="Backend API for PLA System — Multi-Agent RAG Learning Platform",
+    description="Backend API for Synapsa System — Multi-Agent RAG Learning Platform",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -69,7 +69,7 @@ app.include_router(ws_router, tags=["websocket"])
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to PLA API — Multi-Agent RAG Learning Platform"}
+    return {"message": "Welcome to Synapsa API — Multi-Agent RAG Learning Platform"}
 
 @app.get("/health")
 async def health():

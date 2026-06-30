@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Model Assignment
     ORCHESTRATOR_MODEL: str = Field(default="llama-3.3-70b-versatile")
-    PLANNER_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    SynapsaNNER_MODEL: str = Field(default="llama-3.3-70b-versatile")
     RESEARCHER_MODEL: str = Field(default="gemma4:e4b")
     COMPOSER_MODEL: str = Field(default="llama-3.3-70b-versatile")
     TUTOR_MODEL: str = Field(default="gemma4:e4b")

@@ -10,7 +10,7 @@ from app.dependencies import get_current_user, verify_session_owner, verify_topi
 from app.models.agent import ProgressSignal as DBProgressSignal, QuizResult as DBQuizResult
 from app.models.learning import LearningSession as DBLearningSession, Topic as DBTopic
 from app.models.user import User
-from app.agents.state import ProgressSignals, PLAState
+from app.agents.state import ProgressSignals, SynapsaState
 from app.agents.feedback_engine import run_feedback_loop
 from app.agents.planner import replan_node
 from app.schemas.progress import UserMetricsResponse
@@ -250,7 +250,7 @@ async def evaluate_feedback(
             curriculum_obj = Curriculum.model_validate(db_curriculum.curriculum_json)
 
             # Buat dummy state
-            state: PLAState = {
+            state: SynapsaState = {
                 "user_id": str(session.user_id),
                 "session_id": str(session.id),
                 "learning_config": None, # tidak terlalu butuh untuk replan jika curriculum ada

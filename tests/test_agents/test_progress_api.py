@@ -32,6 +32,7 @@ class MockSessionRow:
     """Stand-in for a LearningSession row owned by TEST_USER."""
     def __init__(self, session_id):
         self.id = session_id
+        self.session_id = session_id
         self.user_id = TEST_USER.id
         self.created_at = None
         self.completed_at = None

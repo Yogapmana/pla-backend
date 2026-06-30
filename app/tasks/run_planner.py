@@ -20,7 +20,7 @@ def run_planner_task(self, session_id: str, config: dict):
         await engine.dispose()
 
         from app.agents.planner import PlannerAgent
-        from app.agents.state import PLAState, LearningConfig
+        from app.agents.state import SynapsaState, LearningConfig
 
         planner = PlannerAgent()
         learning_config = LearningConfig(

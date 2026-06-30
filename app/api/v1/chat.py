@@ -152,6 +152,7 @@ async def send_message(
                 session_id=str(request.session_id),
                 topic_id=request.topic_id,
                 query=request.message,
+                language=session.language,
                 chat_history=chat_history,
                 include_sources=request.include_sources,
             )

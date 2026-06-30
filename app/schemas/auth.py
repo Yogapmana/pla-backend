@@ -8,12 +8,18 @@ class UserCreate(BaseModel):
     username: str
     email: EmailStr
     password: str
+    language_preference: str = "id"
+
+
+class UserLanguageUpdate(BaseModel):
+    language_preference: str
 
 
 class UserResponse(BaseModel):
     id: UUID
     username: str
     email: EmailStr
+    language_preference: str
     # Gamification streak fields — read from the users table.
     # `current_streak` and `longest_streak` default to 0 for
     # users who haven't logged in yet; `last_login_date` is None

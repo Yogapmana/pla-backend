@@ -28,7 +28,6 @@ sys.path.insert(0, '.')
 
 from app.services.concept_graph_service import (
     ConceptGraphService,
-    CONCEPT_EXTRACTION_PROMPT,
     _tokenize,
     _jaccard,
     _concept_label_from_title,
@@ -625,7 +624,7 @@ def test_to_mermaid_syntax_parses_with_mermaid_v11():
     # frontend directory so Node's module resolution finds the
     # ``mermaid`` package; we delete it after the test.
     backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    frontend_dir = os.path.join(backend_dir, "pla-frontend")
+    frontend_dir = os.path.join(backend_dir, "synapsa-frontend")
     probe_path = os.path.join(frontend_dir, "_mermaid_parse_probe.mjs")
     syntax_path = os.path.join(frontend_dir, "_mermaid_parse_probe_input.mmd")
     try:

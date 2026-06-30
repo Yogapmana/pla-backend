@@ -69,7 +69,7 @@ STREAK_MILESTONES: dict[int, dict] = {
     365: {
         "name": "Legend",
         "icon": "👑",
-        "description": "365 HARI STREAK! Kamu adalah legenda PLA!",
+        "description": "365 HARI STREAK! Kamu adalah legenda Synapsa!",
     },
 }
 

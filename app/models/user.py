@@ -18,6 +18,7 @@ class User(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    language_preference = Column(String(10), default="id")
 
     # ── Gamification: daily login streak ────────────────────────
     # The streak is the number of consecutive days the user has

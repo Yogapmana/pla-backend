@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.db.database import get_db
-from app.schemas.auth import UserCreate, UserResponse, Token
+from app.schemas.auth import UserCreate, UserResponse, Token, UserLanguageUpdate
 from app.models.user import User
 from app.services.auth_service import get_password_hash, verify_password, create_access_token
 from app.services.streak_service import update_streak_on_login
@@ -26,6 +26,7 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         email=user_in.email,
         username=user_in.username,
         hashed_password=hashed_password,
+        language_preference=user_in.language_preference,
     )
     db.add(new_user)
     await db.commit()
@@ -100,6 +101,19 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     # No streak update on /me — this endpoint just reads the
     # current state. Streak updates happen ONLY on login/register
     # to avoid double-counting refresh-driven page loads.
+    return current_user
+
+
+@router.put("/me/language", response_model=UserResponse)
+async def update_user_language(
+    update_data: UserLanguageUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Update the user's language preference."""
+    current_user.language_preference = update_data.language_preference
+    await db.commit()
+    await db.refresh(current_user)
     return current_user
 
 

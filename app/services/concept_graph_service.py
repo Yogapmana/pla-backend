@@ -546,7 +546,7 @@ class ConceptGraphService:
     ) -> dict[str, Any]:
         """
         Convert a ConceptGraphResponse-shaped dict into Mermaid v11 mindmap
-        syntax. Uses the PLA warm-ivory palette (matches the rest of the
+        syntax. Uses the Synapsa warm-ivory palette (matches the rest of the
         app) — the root is a terracotta circle, weeks are a soft cream
         pill, concepts are info-blue, topics are warm-ivory, and resources
         are emerald.

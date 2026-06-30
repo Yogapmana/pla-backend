@@ -85,7 +85,7 @@ class AgentLog(BaseModel):
     message: str
     metadata: Optional[Dict[str, Any]] = None
 
-class PLAState(TypedDict):
+class SynapsaState(TypedDict):
     user_id: str
     session_id: str
     learning_config: LearningConfig

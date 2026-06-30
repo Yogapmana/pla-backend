@@ -2,8 +2,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
+from redis import asyncio as aioredis
 
 from app.db.database import get_db
+from app.config import settings
 from app.dependencies import get_current_user
 from app.models.user import User
 from app.services.learning_service import LearningService
@@ -132,6 +134,22 @@ async def trigger_generate_module(
         return GenerateModuleResponse(
             status="already_exists",
             module_id=str(module.id),
+        )
+
+    # Prevent React Strict Mode or frontend double-clicks from spawning duplicate Celery tasks
+    redis = aioredis.from_url(settings.REDIS_URL)
+    lock_key = f"lock:generate_module:{topic_id}"
+    
+    # Try to set a lock that expires in 600 seconds (10 minutes)
+    # nx=True means it will only be set if it does not already exist
+    is_acquired = await redis.set(lock_key, "locked", ex=600, nx=True)
+    await redis.close()
+
+    if not is_acquired:
+        # A task is already generating this module
+        return GenerateModuleResponse(
+            status="generating",
+            task_id="duplicate-prevented",
         )
     
     task = generate_module_for_topic.delay(

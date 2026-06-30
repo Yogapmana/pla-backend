@@ -8,7 +8,7 @@ from app.services.learning_service import LearningService
 from app.models.learning import LearningModule as DBLearningModule
 from app.utils.log_broker import publish_log
 from app.agents.state import (
-    PLAState, 
+    SynapsaState, 
     LearningConfig, 
     RawContent, 
     AgentLog, 
@@ -30,9 +30,11 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
     Generate a learning module for a specific topic on-demand.
     This runs the researcher → composer → indexer pipeline for a single topic.
     """
+    # Clear inherited connections from parent process BEFORE creating the new asyncio loop
+    engine.sync_engine.dispose(close=False)
+    
     async def _run():
-        # Clear inherited connections attached to different event loops
-        await engine.dispose()
+
         async with AsyncSession(engine) as db:
             service = LearningService(db)
             
@@ -79,7 +81,7 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
                 weeks=[week]
             )
             
-            state: PLAState = {
+            state: SynapsaState = {
                 "user_id": user_id,
                 "session_id": session_id,
                 "learning_config": config,

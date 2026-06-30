@@ -136,7 +136,7 @@ class RAGEvaluator:
         dimensions on 0-1 scale and parses the numeric answer.
 
         Forces n=1 in the LLM call (Groq compatibility).
-        Prompt is bilingual (Indonesian) to match PLA's domain.
+        Prompt is bilingual (Indonesian) to match Synapsa's domain.
         """
         ctx_str = "\n\n---\n\n".join(
             (c or "")[:1200] for c in (contexts or [])[:5]

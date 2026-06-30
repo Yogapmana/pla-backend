@@ -33,7 +33,7 @@ async def fallback_scrape(url: str, timeout: int) -> str:
     """Fallback scraper using BeautifulSoup if Jina fails."""
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; PLA/1.0)"}
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; Synapsa/1.0)"}
             response = await client.get(url, headers=headers)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
