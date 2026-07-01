@@ -152,23 +152,30 @@ async def tutor_generate_quiz(
         f"[TUTOR] Generating {num_questions} quiz questions (Difficulty: {difficulty}) for '{topic_title}'..."
     )
 
-    # Get context from Qdrant
+    # Get context from Qdrant, fetching more chunks and sampling randomly to increase variety
+    import random
+    
     chunks = retrieve_and_rerank(
         user_id=user_id,
         query=f"materi pembelajaran {topic_title}",
         topic_id=topic_id,
-        top_k_retrieve=5,
-        top_k_rerank=3,
+        top_k_retrieve=10,
+        top_k_rerank=5,
         use_hyde=False,
     )
+    if len(chunks) > 3:
+        chunks = random.sample(chunks, 3)
+        
     context = _build_context_block(chunks)
 
-    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ), Benar/Salah secara ACAK.
+    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ) secara ACAK.
 TULIS KESELURUHAN SOAL DAN JAWABAN DALAM BAHASA: {language}.
 
 TINGKAT KESULITAN SOAL: {difficulty}
-(Jika mudah: fokus pada definisi dasar. Jika menengah: fokus pada pemahaman konsep. Jika sulit: fokus pada analisis, studi kasus, atau logika tingkat tinggi).
-
+(Panduan Kesulitan:
+- Mudah: Pertanyaan berfokus pada pengenalan konsep dan studi kasus sederhana yang aplikatif. Jangan hanya menanyakan definisi murni.
+- Menengah: Mengharuskan pengguna menganalisis hubungan antar konsep dan memecahkan skenario tingkat menengah.
+- Sulit: Fokus pada penyelesaian masalah kompleks, analisis mendalam, atau jebakan logika (trick questions) berdasarkan materi.)
 PENTING UNTUK VARIASI: 
 - Acak konsep yang kamu pilih dari materi (jangan hanya fokus pada paragraf pertama).
 - Buat soal yang berbeda dari yang biasanya kamu hasilkan agar pengguna tidak bosan saat mengulang kuis.
@@ -176,9 +183,8 @@ PENTING UNTUK VARIASI:
 MATERI:
 {context}
 
-RATIO SOAL: ~80% MCQ, ~20% Benar/Salah
+RATIO SOAL: 100% MCQ
 - MCQ: 4 opsi (A, B, C, D)
-- True/False: satu pertanyaan dengan jawaban "Benar" atau "Salah"
 
 FORMAT OUTPUT (JSON array):
 [
@@ -188,20 +194,12 @@ FORMAT OUTPUT (JSON array):
     "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "A. ...",
     "explanation": "Penjelasan singkat mengapa jawaban ini benar."
-  }},
-  {{
-    "question": "Pernyataan tentang materi?",
-    "question_type": "true_false",
-    "options": ["Benar", "Salah"],
-    "correct_answer": "Benar",
-    "explanation": "Penjelasan mengapa jawaban ini benar."
   }}
 ]
 
 PENTING:
 - correct_answer untuk MCQ harus berupa TEKS LENGKAP dari opsi yang benar
-- correct_answer untuk True/False harus "Benar" atau "Salah"
-- question_type wajib diisi: "mcq", "true_false"
+- question_type wajib diisi: "mcq"
 
 Hanya output JSON array, tanpa teks tambahan."""
 
@@ -227,7 +225,8 @@ Hanya output JSON array, tanpa teks tambahan."""
             return []
         return parsed
 
-    llm = get_llm(settings.TUTOR_MODEL)
+    # Set temperature to 0.7 for higher creativity and question variety
+    llm = get_llm(settings.TUTOR_MODEL, temperature=0.7)
 
     # First attempt — the normal prompt.
     response = llm.invoke(prompt)

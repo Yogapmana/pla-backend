@@ -30,6 +30,8 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
         return ChatGroq(
             model_name=model_name,
             api_key=settings.GROQ_API_KEY,
+            max_retries=5,
+            timeout=60,
             **kwargs
         )
     else:
