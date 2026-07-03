@@ -195,7 +195,7 @@ class MindmapService:
         # Try LLM first
         llm_result: dict | None = None
         llm_was_called = False
-        model_name = settings.SynapsaNNER_MODEL
+        model_name = settings.PLANNER_MODEL
         try:
             llm_result = await self._call_llm(
                 course_title=course_title,

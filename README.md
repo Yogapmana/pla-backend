@@ -11,7 +11,7 @@ Built for undergraduate thesis (Skripsi S1).
 The system uses **LangGraph** to orchestrate five specialized agents in a pipeline:
 
 ```
-[START] → [SynapsaNNER] → [RESEARCHER] → [COMPOSER] → [TUTOR + FEEDBACK] → [END]
+[START] → [PLANNER] → [RESEARCHER] → [COMPOSER] → [TUTOR + FEEDBACK] → [END]
                         ↑
                     ┌──[FEEDBACK ENGINE]──┘
 ```

@@ -74,53 +74,25 @@ class CurriculumConceptsResult(BaseModel):
 # ════════════════════════════════════════════════════════════════════════
 
 class KeyPoint(BaseModel):
-    """A specific fact, term, or example under a concept.
-
-    - ``label``      : 2-5 word phrase, e.g. "Virtual DOM", "LCP metric"
-    - ``description``: 1-2 sentences that *teach* the fact in context
-    - ``kind``       : 'fact' | 'term' | 'example' | 'principle'
-                       (used by the frontend to pick an icon)
-    """
+    """A specific fact, term, or example under a concept."""
     label: str = Field(
-        description="2-5 word phrase, descriptive, e.g. 'Virtual DOM diffing'."
+        description="2-5 word phrase, descriptive."
     )
     description: str = Field(
-        description=(
-            "1-2 sentences explaining this fact. Should be self-contained "
-            "so the user can learn from the mindmap alone."
-        )
-    )
-    kind: str = Field(
-        default="fact",
-        description="One of: 'fact', 'term', 'example', 'principle'.",
+        description="1-2 sentences explaining this point."
     )
 
 
 class Concept(BaseModel):
-    """A key idea or skill under a theme.
-
-    - ``label``      : 3-6 word phrase, e.g. "React Component Lifecycle"
-    - ``description``: 1-2 sentences — what is this AND why does it matter
-    - ``emoji``      : a single emoji to identify the concept visually
-    - ``difficulty`` : 1-5, where 1 = easy and 5 = advanced. Used by
-                       the frontend for color/intensity.
-    - ``key_points`` : 2-4 details the user should remember
-    - ``topic_ids``  : which curriculum topics this concept covers
-    """
+    """A key idea or skill under a theme."""
     label: str = Field(
         description="3-6 word phrase that fully describes this concept."
     )
     description: str = Field(
         description="1-2 sentences. WHAT is this concept and WHY does it matter?"
     )
-    emoji: str = Field(
-        default="💡", description="One emoji to visually identify the concept."
-    )
-    difficulty: int = Field(
-        default=2, ge=1, le=5, description="1=easy, 5=advanced."
-    )
     key_points: list[KeyPoint] = Field(
-        description="2-4 specific details — facts, terms, examples, principles."
+        description="Key details the user should remember. Number varies by complexity."
     )
     topic_ids: list[str] = Field(
         default_factory=list, description="Curriculum topic_ids this concept covers."
@@ -128,33 +100,28 @@ class Concept(BaseModel):
 
 
 class Theme(BaseModel):
-    """A high-level area of the field — the major branches of the mindmap.
-
-    4-7 themes per curriculum. Each theme gets a color so the
-    frontend can visually separate them in the layout.
-    """
+    """A high-level area of the field — the major branches of the mindmap."""
     label: str = Field(
-        description="2-4 word phrase, e.g. 'Frontend Foundations'."
+        description="2-4 word phrase."
     )
     description: str = Field(description="1 sentence.")
-    emoji: str = Field(default="📚")
     color: str = Field(
         default="blue",
         description="One of: 'blue', 'green', 'amber', 'purple', 'red', 'teal'.",
     )
     concepts: list[Concept] = Field(
-        description="3-5 concepts under this theme."
+        description="Key concepts under this theme. Number varies by material depth."
     )
 
 
 class EnhancedMindmap(BaseModel):
-    """The NotebookLM-style 3-level mindmap output."""
+    """The 3-level mindmap output."""
     course_title: str
     summary: str = Field(
         description="1 short paragraph (max 80 words) describing the curriculum."
     )
     themes: list[Theme] = Field(
-        description="4-7 major themes that span the whole curriculum."
+        description="Major themes that span the whole curriculum."
     )
 
 
@@ -217,38 +184,34 @@ Anda WAJIB mengembalikan JSON dengan struktur KUNCI (KEYS) berikut:
 #   - Difficulty + emoji + color hints to drive the frontend visual
 # ════════════════════════════════════════════════════════════════════════
 
-MINDMAP_V2_PROMPT = """Anda adalah AI assistant yang membuat PETA KONSEP (mind map) EDUKATIF seperti NotebookLM — sebuah representasi visual hierarkis dari sebuah kursus yang bisa DIPELAJARI langsung dari peta-nya saja.
+MINDMAP_V2_PROMPT = """You are an AI assistant that creates EDUCATIONAL CONCEPT MAPS (mind maps) — a visual hierarchical representation of a course that can be LEARNED directly from the map itself.
 
-# Tugas
-Dari hasil riset web (1-2 sumber per topik) untuk kursus "{course_title}", buatlah PETA KONSEP 3-LEVEL yang membantu pelajar memahami **gambaran besar** kursus dan **apa yang akan mereka pelajari**.
+# Task
+From web research results (1-2 sources per topic) for the course "{course_title}", create a 3-LEVEL CONCEPT MAP that helps learners understand the **big picture** of the course and **what they will learn**.
 
-# Skema Output (WAJIB)
-Kembalikan JSON valid dengan struktur berikut:
+# Output Schema (MANDATORY)
+Return valid JSON with this structure:
 
 ```json
 {{
   "course_title": "...",
-  "summary": "1 paragraf overview (maks 80 kata)",
+  "summary": "1 paragraph overview (max 80 words)",
   "themes": [
     {{
-      "label": "Nama Tema (2-4 kata)",
-      "description": "1 kalimat",
-      "emoji": "📱",
+      "label": "Theme Name (2-4 words)",
+      "description": "1 sentence",
       "color": "blue|green|amber|purple|red|teal",
       "concepts": [
         {{
-          "label": "Nama Konsep (3-6 kata, frasa lengkap)",
-          "description": "1-2 kalimat — APA dan MENGAPA penting",
-          "emoji": "🧩",
-          "difficulty": 1-5,
+          "label": "Concept Name (3-6 words, complete phrase)",
+          "description": "1-2 sentences — WHAT and WHY it matters",
           "key_points": [
             {{
-              "label": "Poin kunci (2-5 kata)",
-              "description": "1-2 kalimat edukatif",
-              "kind": "fact|term|example|principle"
+              "label": "Key point (2-5 words)",
+              "description": "1-2 educational sentences"
             }}
           ],
-          "topic_ids": ["id_topik_1", "id_topik_2"]
+          "topic_ids": ["topic_id_1", "topic_id_2"]
         }}
       ]
     }}
@@ -256,43 +219,48 @@ Kembalikan JSON valid dengan struktur berikut:
 }}
 ```
 
-# Aturan KETAT (WAJIB DIIKUTI)
+# STRICT RULES (MUST FOLLOW)
 
-## 1. STRUKTUR
-- **4-7 tema** total. Tema = cabang utama (cabang-cabang besar dari topik sentral).
-- **3-5 konsep** per tema. Konsep = ide/keterampilan utama di bawah tema.
-- **2-4 key_points** per konsep. Key point = fakta spesifik, terminologi, contoh, atau prinsip.
-- **TOTAL node**: 4×3×2 = 24 minimum, 7×5×4 = 140 maximum. Target: 50-80 node.
+## 1. STRUCTURE — FLEXIBLE, FOLLOW THE MATERIAL
+- Number of themes, concepts, and key points should FOLLOW the material naturally.
+- DO NOT force a fixed number. If a theme has 2 concepts, that's fine. If it has 7, that's also fine.
+- Let the CONTENT drive the structure, not an arbitrary count.
+- A simple theme can have fewer branches. A complex theme can have more.
 
-## 2. LABEL (sangat penting)
-- **BUKAN kata kunci** (mis. "useState") — itu JELAS, tapi tidak mendidik.
-- **FRASA LENGKAP** (mis. "Cara Kerja useState Hook") yang menjelaskan ide.
-- Setiap label harus bisa dibaca sendiri tanpa konteks tambahan.
-- 2-6 kata. Bahasa: {language}.
+## 2. LABELS (very important)
+- **NOT keywords** (e.g. "useState") — that's clear but not educational.
+- **COMPLETE PHRASES** (e.g. "How useState Hook Works") that explain the idea.
+- Each label must be readable on its own without extra context.
+- 2-6 words.
 
-## 3. DESKRIPSI (WAJIB ada & edukatif)
-- Setiap node punya `description`. Bukan cuma ringkasan — harus MENGAJAR.
-- Gunakan informasi DARI SUMBER di bawah ini, BUKAN mengarang.
-- Jika sumber tidak menyebutkan, jangan tambahkan fakta.
+## 3. LANGUAGE — CRITICAL
+- ALL text output (course_title, summary, labels, descriptions) MUST be in **{language}**.
+- If language is "id", write in Indonesian. If "en", write in English. Etc.
+- Do NOT mix languages.
 
-## 4. PENGGUNAAN SUMBER
-- Setiap konsep harus punya `topic_ids` — link ke topik kurikulum yang relevan.
-- Setiap key point harus bisa ditelusuri ke sumber spesifik.
+## 4. NO ICONS/EMOJI
+- Do NOT include any emoji or icon characters in labels or descriptions.
+- Keep text clean and plain.
 
-## 5. VARIASI VISUAL
-- Pilih emoji yang relevan untuk setiap tema/konsep.
-- Pilih `difficulty` 1-5 (1=dasar, 5=lanjut).
-- Pilih `color` dari daftar yang diberikan (jangan duplikat warna antar tema yang berdekatan).
+## 5. DESCRIPTIONS (MANDATORY & educational)
+- Every node has a `description`. Not just a summary — it must TEACH.
+- Use information FROM THE SOURCES below, do NOT make things up.
 
-# Informasi Kursus
-- Kursus: {course_title}
+## 6. SOURCE USAGE
+- Each concept must have `topic_ids` — link to relevant curriculum topics.
+
+## 7. VISUAL VARIATION
+- Pick `color` from the given list (don't duplicate colors between adjacent themes).
+
+# Course Information
+- Course: {course_title}
 - Level: {level}
-- Bahasa output: {language}
+- Output language: {language}
 
-# Daftar Topik (untuk referensi topic_id)
+# Topic List (for topic_id reference)
 {topics_summary}
 
-# Hasil Riset per Topik (sumber utama, sudah di-scrape)
+# Research Results per Topic (main sources, already scraped)
 {research_json}
 """
 

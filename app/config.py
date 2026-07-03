@@ -31,7 +31,7 @@ class Settings(BaseSettings):
 
     # Model Assignment
     ORCHESTRATOR_MODEL: str = Field(default="llama-3.3-70b-versatile")
-    SynapsaNNER_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    PLANNER_MODEL: str = Field(default="llama-3.3-70b-versatile")
     RESEARCHER_MODEL: str = Field(default="gemma4:e4b")
     COMPOSER_MODEL: str = Field(default="llama-3.3-70b-versatile")
     TUTOR_MODEL: str = Field(default="gemma4:e4b")
@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # Keamanan & Auth
     SECRET_KEY: str = Field(default="bikin_rahasia_bebas_contoh_1234567890")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=1440)
+    GOOGLE_CLIENT_ID: str = Field(default="")
+
+    # Email (Resend)
+    RESEND_API_KEY: str = Field(default="")
+    MAIL_FROM: str = Field(default="Acme <onboarding@resend.dev>")
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"

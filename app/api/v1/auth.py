@@ -10,6 +10,10 @@ from app.services.auth_service import get_password_hash, verify_password, create
 from app.services.streak_service import update_streak_on_login
 from app.dependencies import get_current_user
 from app.config import settings
+from app.tasks.email_tasks import send_welcome_email_task
+from google.oauth2 import id_token
+from google.auth.transport import requests
+import uuid
 
 router = APIRouter()
 
@@ -31,6 +35,9 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
+    
+    # Send welcome email asynchronously
+    send_welcome_email_task.delay(new_user.email, new_user.username)
 
     # NOTE: We intentionally do NOT call ``update_streak_on_login``
     # here. Register creates the user with ``last_login_date=NULL``,
@@ -126,3 +133,82 @@ async def refresh_token(current_user: User = Depends(get_current_user), db: Asyn
     )
     # No streak update on refresh — same reason as /me above.
     return {"access_token": access_token, "token_type": "bearer", "user": current_user, "streak": None}
+
+from pydantic import BaseModel
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+@router.post("/google", response_model=Token)
+async def google_auth(request: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
+    """Authenticate user with Google id_token."""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google authentication is not configured.")
+        
+    try:
+        # Verify the token with Google
+        idinfo = id_token.verify_oauth2_token(
+            request.credential, 
+            requests.Request(), 
+            settings.GOOGLE_CLIENT_ID
+        )
+        
+        email = idinfo.get("email")
+        name = idinfo.get("name", "User")
+        google_id = idinfo.get("sub")
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Google token does not contain an email address.")
+            
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Google token: {str(e)}")
+        
+    # Check if user already exists
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalars().first()
+    
+    if user:
+        # User exists. Check if they have a google_id, if not, link it.
+        if not user.google_id:
+            user.google_id = google_id
+            if user.auth_provider == "local":
+                user.auth_provider = "google"
+            await db.commit()
+            await db.refresh(user)
+            
+        # Update streak on login
+        streak_data = await update_streak_on_login(db, user)
+        await db.commit()
+        await db.refresh(user)
+    else:
+        # User does not exist, register them
+        user = User(
+            email=email,
+            username=name,
+            hashed_password=None,
+            auth_provider="google",
+            google_id=google_id,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        
+        # Send welcome email asynchronously
+        send_welcome_email_task.delay(user.email, user.username)
+        
+        # Initialize streak on registration since it logs the user in immediately
+        streak_data = await update_streak_on_login(db, user)
+        await db.commit()
+        await db.refresh(user)
+        
+    # Issue JWT token
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user.id)}, expires_delta=access_token_expires
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user,
+        "streak": streak_data,
+    }

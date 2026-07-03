@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-SynapsaNNER_PROMPT = """
+PLANNER_PROMPT = """
 Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
 Tugas Anda adalah memecah topik pembelajaran secara adaptif menjadi sebuah kurikulum terstruktur.
 
@@ -73,7 +73,7 @@ def planner_node(state: SynapsaState) -> SynapsaState:
     state["agent_logs"].append(log)
 
     # Initialize LLM with structured output and large token limit for long curriculums
-    llm = get_llm(settings.SynapsaNNER_MODEL, temperature=0.2, max_tokens=4000)
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, max_tokens=4000)
     from langchain_groq import ChatGroq
     if isinstance(llm, ChatGroq):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
@@ -81,7 +81,7 @@ def planner_node(state: SynapsaState) -> SynapsaState:
         structured_llm = llm.with_structured_output(Curriculum)
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SynapsaNNER_PROMPT),
+        ("system", PLANNER_PROMPT),
         ("human", "Tolong buatkan kurikulum untuk saya berdasarkan spesifikasi di atas.")
     ])
     
@@ -131,7 +131,7 @@ def planner_node(state: SynapsaState) -> SynapsaState:
             elif hasattr(e, 'body'):
                 error_msg += f" - Body: {e.body}"
             
-            logger.warning(f"[SynapsaNNER] Attempt {attempt + 1} failed: {error_msg}")
+            logger.warning(f"[PLANNER] Attempt {attempt + 1} failed: {error_msg}")
             
             if attempt == max_retries - 1:
                 error_log = AgentLog(
@@ -147,7 +147,7 @@ def planner_node(state: SynapsaState) -> SynapsaState:
     return state
 
 
-RESynapsaN_PROMPT = """
+REPLAN_PROMPT = """
 Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
 Tugas Anda adalah MEREVISI kurikulum pembelajaran yang sudah ada berdasarkan umpan balik (feedback) dari performa pengguna.
 
@@ -218,7 +218,7 @@ def replan_node(state: SynapsaState) -> SynapsaState:
         state["agent_logs"] = []
     state["agent_logs"].append(log)
 
-    llm = get_llm(settings.SynapsaNNER_MODEL, temperature=0.3)
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.3)
     from langchain_groq import ChatGroq
     if isinstance(llm, ChatGroq):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
@@ -226,7 +226,7 @@ def replan_node(state: SynapsaState) -> SynapsaState:
         structured_llm = llm.with_structured_output(Curriculum)
     
     prompt = ChatPromptTemplate.from_messages([
-        ("system", RESynapsaN_PROMPT),
+        ("system", REPLAN_PROMPT),
         ("human", "Tolong revisi kurikulum ini sesuai feedback action yang diberikan.")
     ])
     

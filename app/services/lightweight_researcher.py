@@ -54,31 +54,59 @@ MAX_SCRAPED_CHARS = 2500
 JINA_CONCURRENCY = 8
 
 
-async def _scrape_one(url: str) -> str:
-    """Scrape a single URL via Jina reader, return the truncated text.
+async def _scrape_one(url: str, tavily_snippet: str = "") -> str:
+    """Scrape a single URL. Strategy (in order):
+    1. Jina Reader (fast, structured).
+    2. BeautifulSoup direct scrape (if Jina returns 402 / quota exceeded).
+    3. Tavily snippet as last resort (always available, short but relevant).
 
-    Returns empty string on failure (logged but not raised) so a single
-    bad URL doesn't break the whole mindmap generation.
+    Returns empty string only if all three fail.
     """
+    import httpx
+    from app.tools.jina_reader import fallback_scrape
+
     try:
         text = await fetch_jina_with_retry(url, timeout=20)
         return (text or "")[:MAX_SCRAPED_CHARS]
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 402:
+            logger.warning(
+                "[LIGHTWEIGHT-RESEARCHER] Jina quota exceeded for %s — falling back to BS4", url
+            )
+            # Fallback 1: BeautifulSoup direct scrape
+            bs_text = await fallback_scrape(url, timeout=20)
+            if bs_text:
+                return bs_text[:MAX_SCRAPED_CHARS]
+            # Fallback 2: Tavily snippet (always available)
+            if tavily_snippet:
+                logger.info(
+                    "[LIGHTWEIGHT-RESEARCHER] Using Tavily snippet for %s", url
+                )
+                return tavily_snippet[:MAX_SCRAPED_CHARS]
+            return ""
+        logger.warning("[LIGHTWEIGHT-RESEARCHER] Jina failed for %s: %s", url, exc)
+        return tavily_snippet[:MAX_SCRAPED_CHARS] if tavily_snippet else ""
     except Exception as exc:
-        logger.warning(
-            "[LIGHTWEIGHT-RESEARCHER] Jina failed for %s: %s", url, exc
-        )
-        return ""
+        logger.warning("[LIGHTWEIGHT-RESEARCHER] Jina failed for %s: %s", url, exc)
+        return tavily_snippet[:MAX_SCRAPED_CHARS] if tavily_snippet else ""
 
 
-async def _scrape_parallel(urls: list[str]) -> list[str]:
-    """Scrape multiple URLs with bounded concurrency."""
+async def _scrape_parallel(urls: list[str], snippets: list[str] | None = None) -> list[str]:
+    """Scrape multiple URLs with bounded concurrency.
+    
+    ``snippets`` (optional) must be the same length as ``urls``. Each snippet
+    is passed to ``_scrape_one`` as the last-resort fallback when both Jina
+    and BeautifulSoup fail for that URL.
+    """
+    if snippets is None:
+        snippets = [""] * len(urls)
     sem = asyncio.Semaphore(JINA_CONCURRENCY)
 
-    async def _bounded(url: str) -> str:
+    async def _bounded(url: str, snippet: str) -> str:
         async with sem:
-            return await _scrape_one(url)
+            return await _scrape_one(url, tavily_snippet=snippet)
 
-    return await asyncio.gather(*[_bounded(u) for u in urls])
+    return await asyncio.gather(*[_bounded(u, s) for u, s in zip(urls, snippets)])
 
 
 def _tavily_search_sync(query: str, max_results: int) -> list[dict]:
@@ -194,12 +222,13 @@ async def _process_topic(topic: dict) -> list[dict]:
     if not tavily_results:
         return []
 
-    # 2. Jina scrape the URLs in parallel
+    # 2. Jina scrape the URLs in parallel, pass Tavily snippets as fallback
     urls = [r.get("url", "") for r in tavily_results if r.get("url")]
+    snippets = [r.get("content", "") for r in tavily_results if r.get("url")]
     if not urls:
         return []
 
-    scraped_texts = await _scrape_parallel(urls)
+    scraped_texts = await _scrape_parallel(urls, snippets=snippets)
 
     # 3. Merge Tavily metadata with scraped text
     out: list[dict] = []

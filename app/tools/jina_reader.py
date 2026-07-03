@@ -26,6 +26,9 @@ async def fetch_jina_with_retry(url: str, timeout: int) -> str:
 
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
         response = await client.get(reader_url, headers=headers)
+        # Raise immediately on 402 — retrying won't help when quota is exceeded
+        if response.status_code == 402:
+            response.raise_for_status()
         response.raise_for_status()
         return response.text.strip()
 

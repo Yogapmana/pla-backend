@@ -28,6 +28,8 @@ tavily-python>=0.3.3
 PyJWT>=2.8.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.9
+google-auth>=2.29.0
+resend>=2.1.0
 
 # RAG & Document Processing
 flashrank>=0.2.8
@@ -43,6 +45,7 @@ langchain-ollama>=0.2.0
 
 # HTTP Client
 httpx>=0.27.0
+beautifulsoup4>=4.12.0
 
 # Test dependencies
 pytest>=8.0.0

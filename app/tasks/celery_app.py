@@ -13,6 +13,7 @@ celery_app = Celery(
         "app.tasks.run_composer",
         "app.tasks.generate_module",
         "app.tasks.generate_enhanced_mindmap",
+        "app.tasks.email_tasks",
     ],
 )
 
@@ -29,3 +30,13 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,  # One task at a time per worker
     task_acks_late=True,  # Acknowledge after completion
 )
+
+from celery.schedules import crontab
+
+celery_app.conf.beat_schedule = {
+    # Run every day at 16:00 UTC (e.g., afternoon reminder)
+    "send-daily-reminders": {
+        "task": "app.tasks.check_daily_reminders_task",
+        "schedule": crontab(hour=16, minute=0),
+    },
+}
