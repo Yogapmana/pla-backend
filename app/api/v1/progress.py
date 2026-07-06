@@ -1,6 +1,7 @@
 import uuid
+import logging
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -24,6 +25,7 @@ class SignalSubmit(BaseModel):
     topic_id: str
     quiz_score: Optional[float] = None
     reading_time_ratio: Optional[float] = None
+    reading_time_seconds: Optional[float] = None
     question_frequency: Optional[float] = None
     self_assessment: Optional[float] = None
     material_rating: Optional[float] = None
@@ -143,6 +145,7 @@ async def submit_progress_signals(
     signal_map = {
         "quiz_score": data.quiz_score,
         "reading_time_ratio": data.reading_time_ratio,
+        "reading_time_seconds": data.reading_time_seconds,
         "question_frequency": data.question_frequency,
         "self_assessment": data.self_assessment,
         "material_rating": data.material_rating
@@ -321,3 +324,102 @@ async def get_topic_unlock_status(
         unlocked=unlocked,
         latest_quiz_score=round(latest_score * 100, 1) if latest_score is not None else None,
     )
+
+
+@router.get("/{session_id}/daily-study-time")
+async def get_daily_study_time(
+    session_id: str,
+    days: int = 30,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return daily study time (in minutes) for the last N days.
+
+    Aggregates two sources:
+      1. ``reading_time_seconds`` signals from progress_signals table
+         (recorded by the frontend ReadingTracker when the user reads a module)
+      2. ``time_spent_seconds`` from quiz_results table
+         (recorded when the user completes a quiz)
+
+    Returns a list of {date, reading_minutes, quiz_minutes, total_minutes}
+    sorted ascending by date.
+    """
+    logger = logging.getLogger(__name__)
+    session = await verify_session_owner(session_id, current_user, db)
+    session_uuid = session.id
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # 1. Reading time from progress signals
+    reading_result = await db.execute(
+        select(DBProgressSignal)
+        .where(DBProgressSignal.session_id == session_uuid)
+        .where(DBProgressSignal.signal_type == "reading_time_seconds")
+        .where(DBProgressSignal.created_at >= cutoff)
+    )
+    reading_signals = reading_result.scalars().all()
+
+    daily_reading: dict[str, float] = defaultdict(float)
+    for sig in reading_signals:
+        day_str = sig.created_at.date().isoformat()
+        daily_reading[day_str] += sig.value  # seconds
+
+    # 2. Quiz time from quiz results
+    quiz_result = await db.execute(
+        select(DBQuizResult)
+        .where(DBQuizResult.session_id == session_uuid)
+        .where(DBQuizResult.created_at >= cutoff)
+    )
+    quiz_rows = quiz_result.scalars().all()
+
+    daily_quiz: dict[str, float] = defaultdict(float)
+    for q in quiz_rows:
+        if q.time_spent_seconds and q.created_at:
+            day_str = q.created_at.date().isoformat()
+            daily_quiz[day_str] += q.time_spent_seconds  # seconds
+
+    # 3. Merge into a unified list
+    all_dates = sorted(set(daily_reading.keys()) | set(daily_quiz.keys()))
+
+    result = []
+    for d in all_dates:
+        reading_sec = daily_reading.get(d, 0)
+        quiz_sec = daily_quiz.get(d, 0)
+        result.append({
+            "date": d,
+            "reading_minutes": round(reading_sec / 60, 1),
+            "quiz_minutes": round(quiz_sec / 60, 1),
+            "total_minutes": round((reading_sec + quiz_sec) / 60, 1),
+        })
+
+    return result
+
+@router.get("/signals/{session_id}/{topic_id}")
+async def get_topic_signals(
+    session_id: str,
+    topic_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get the latest material_rating and self_assessment signals for a topic.
+    Useful so the UI doesn't reset when the user reopens the module.
+    """
+    session = await verify_session_owner(session_id, current_user, db)
+    
+    result = await db.execute(
+        select(DBProgressSignal)
+        .where(DBProgressSignal.session_id == session.id)
+        .where(DBProgressSignal.topic_id == topic_id)
+        .where(DBProgressSignal.signal_type.in_(["material_rating", "self_assessment"]))
+        .order_by(DBProgressSignal.created_at.asc())
+    )
+    signals = result.scalars().all()
+    
+    # Use dictionary to keep only the latest value for each type (since we order by asc, latest overwrites)
+    latest_signals = {}
+    for sig in signals:
+        latest_signals[sig.signal_type] = sig.value
+        
+    return latest_signals
