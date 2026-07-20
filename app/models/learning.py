@@ -60,6 +60,8 @@ class LearningModule(Base):
     session_id = Column(UUID(as_uuid=True), ForeignKey("learning_sessions.id"), nullable=True)
     title = Column(String(500), nullable=False)
     content_markdown = Column(String, nullable=False)
+    remedial_markdown = Column(String, nullable=True)
+    deep_dive_markdown = Column(String, nullable=True)
     content_version = Column(Integer, default=1)
     sources = Column(JSONB, nullable=True)
     word_count = Column(Integer, nullable=True)

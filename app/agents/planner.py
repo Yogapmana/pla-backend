@@ -149,48 +149,31 @@ def planner_node(state: SynapsaState) -> SynapsaState:
 
 REPLAN_PROMPT = """
 Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
-Tugas Anda adalah MEREVISI kurikulum pembelajaran yang sudah ada berdasarkan umpan balik (feedback) dari performa pengguna.
+Tugas Anda adalah membuat SATU TOPIK BARU (modul pembelajaran tunggal) untuk disisipkan ke dalam kurikulum pembelajaran pengguna berdasarkan evaluasi Mastery Score.
 
-Informasi Pembelajaran Pengguna:
-- Topik Utama: {topic}
-- Level: {level}
+Topik Utama Kurikulum: {topic}
+Konteks Kesalahan Kuis: {context}
 
-Kurikulum Saat Ini (JSON):
-{current_curriculum}
+Topik Terakhir yang diselesaikan (Target ID: {target_topic_id}):
+{current_topic_json}
 
-Feedback Action yang diterima untuk Topik ID [{target_topic_id}]: {action}
+Tindakan yang harus dilakukan (Action): {action}
+Aturan:
+1. Jika action "remedial": Buatlah topik "Micro-Remedial" berdurasi 15-20 menit yang HANYA berfokus untuk membahas dan memperbaiki konsep yang salah berdasarkan 'Konteks Kesalahan Kuis'.
+2. Jika action "enrichment": Buatlah topik "Deep Dive / Pengayaan" berdurasi 20-30 menit berupa studi kasus teknis atau materi tingkat lanjut lanjutan dari topik terakhir.
+3. KEMBALIKAN OUTPUT DALAM FORMAT JSON SESUAI DENGAN SKEMA.
+4. SEMUA TEKS KONTEN (judul, deskripsi) WAJIB DALAM BAHASA: {language}.
 
-Aturan Revisi berdasarkan Action:
-1. Jika "repeat": Pengguna kesulitan. Tambahkan hari/topik baru setelah topik ini untuk mengulang materi dengan pendekatan yang lebih mendasar/mudah. Buat search_queries yang menargetkan penjelasan konsep dasar (misal "explain like I'm 5", "basic introduction").
-2. Jika "review": Pengguna cukup paham tapi perlu penguatan. Tambahkan satu sesi singkat untuk mereview topik ini sebelum lanjut ke topik berikutnya.
-3. Jika "continue": Pengguna paham. Tidak perlu revisi besar, mungkin hanya sedikit penyesuaian jika diperlukan.
-4. Jika "accelerate": Pengguna sangat paham. Anda boleh menghapus atau menggabungkan sub-topik pengantar di hari-hari berikutnya agar pengguna bisa belajar lebih cepat.
-5. KEMBALIKAN OUTPUT DALAM FORMAT JSON SESUAI DENGAN SKEMA YANG DIMINTA.
-6. PENTING: KUNCI JSON (JSON KEYS) HARUS SAMA PERSIS DENGAN SKEMA. JANGAN TERJEMAHKAN KUNCI JSON.
-7. SEMUA TEKS KONTEN (judul, deskripsi, dll kecuali search_queries dan keys JSON) WAJIB DITULIS DALAM BAHASA: {language}.
 Anda WAJIB mengikuti format JSON persis seperti contoh ini:
 ```json
 {{
-  "curriculum_id": "string",
-  "topic": "string",
-  "total_weeks": angka,
-  "weeks": [
-    {{
-      "week": 1,
-      "title": "Judul Minggu",
-      "days": [
-        {{
-          "day": 1,
-          "topic_id": "ID Topik",
-          "title": "Judul Topik Harian",
-          "description": "Deskripsi topik",
-          "search_queries": ["query pencarian inggris"],
-          "duration_minutes": angka,
-          "status": "pending"
-        }}
-      ]
-    }}
-  ]
+  "day": 0,
+  "topic_id": "ID_Topik_Baru_Unik",
+  "title": "Judul Topik Harian",
+  "description": "Deskripsi mendetail mengenai topik ini",
+  "search_queries": ["query pencarian spesifik berbahasa inggris"],
+  "duration_minutes": 20,
+  "status": "pending"
 }}
 ```
 """
@@ -211,54 +194,80 @@ def replan_node(state: SynapsaState) -> SynapsaState:
         timestamp=datetime.utcnow(),
         agent="planner",
         level="info",
-        message=f"Revising curriculum based on feedback action '{latest_feedback.action}' for topic '{latest_feedback.topic_id}'..."
+        message=f"Generating new {latest_feedback.action} module after topic '{latest_feedback.topic_id}'..."
     )
     
     if "agent_logs" not in state or state["agent_logs"] is None:
         state["agent_logs"] = []
     state["agent_logs"].append(log)
 
+    if latest_feedback.action not in ("remedial", "enrichment"):
+        return state
+
+    # Cari topik saat ini
+    current_topic_json = ""
+    week_idx = -1
+    day_idx = -1
+    for w_i, week in enumerate(current_curriculum.weeks):
+        for d_i, day in enumerate(week.days):
+            if day.topic_id == latest_feedback.topic_id:
+                current_topic_json = day.model_dump_json(indent=2)
+                week_idx = w_i
+                day_idx = d_i
+                break
+        if week_idx != -1:
+            break
+            
+    if week_idx == -1:
+        return state
+
     llm = get_llm(settings.PLANNER_MODEL, temperature=0.3)
     from langchain_groq import ChatGroq
+    from app.agents.state import DaySchedule
     if isinstance(llm, ChatGroq):
-        structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
+        structured_llm = llm.with_structured_output(DaySchedule, method="json_mode")
     else:
-        structured_llm = llm.with_structured_output(Curriculum)
+        structured_llm = llm.with_structured_output(DaySchedule)
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", REPLAN_PROMPT),
-        ("human", "Tolong revisi kurikulum ini sesuai feedback action yang diberikan.")
+        ("human", "Tolong buat satu topik baru sesuai instruksi.")
     ])
     
     chain = prompt | structured_llm
     
     try:
-        revised_curriculum: Curriculum = chain.invoke({
+        new_day: DaySchedule = chain.invoke({
             "topic": config.topic if config else current_curriculum.topic,
             "level": config.level if config else "umum",
             "language": config.language if config else "id",
-            "current_curriculum": current_curriculum.model_dump_json(indent=2),
+            "current_topic_json": current_topic_json,
             "target_topic_id": latest_feedback.topic_id,
-            "action": latest_feedback.action
+            "action": latest_feedback.action,
+            "context": getattr(latest_feedback, "context", None) or "Tidak ada konteks spesifik."
         })
-        
-        # Pertahankan ID kurikulum asli
-        revised_curriculum.curriculum_id = current_curriculum.curriculum_id
         
         # Make topic_ids globally unique to avoid Postgres PK collisions
         short_session = str(state["session_id"]).split("-")[0]
-        for week in revised_curriculum.weeks:
-            for day in week.days:
-                if short_session not in day.topic_id:
-                    day.topic_id = f"{short_session}-{day.topic_id}"
+        if short_session not in new_day.topic_id:
+            new_day.topic_id = f"{short_session}-{new_day.topic_id}"
+            
+        # Sisipkan topik baru tepat setelah topik saat ini
+        current_curriculum.weeks[week_idx].days.insert(day_idx + 1, new_day)
+        
+        # Perbarui urutan 'day' secara sekuensial agar tidak membingungkan frontend
+        day_counter = 1
+        for d in current_curriculum.weeks[week_idx].days:
+            d.day = day_counter
+            day_counter += 1
                     
-        state["curriculum"] = revised_curriculum
+        state["curriculum"] = current_curriculum
         
         success_log = AgentLog(
             timestamp=datetime.utcnow(),
             agent="planner",
             level="info",
-            message=f"Successfully revised curriculum due to '{latest_feedback.action}' feedback."
+            message=f"Successfully inserted {latest_feedback.action} module."
         )
         state["agent_logs"].append(success_log)
         
@@ -267,7 +276,7 @@ def replan_node(state: SynapsaState) -> SynapsaState:
             timestamp=datetime.utcnow(),
             agent="planner",
             level="error",
-            message=f"Error revising curriculum: {str(e)}"
+            message=f"Error generating module: {str(e)}"
         )
         state["agent_logs"].append(error_log)
         

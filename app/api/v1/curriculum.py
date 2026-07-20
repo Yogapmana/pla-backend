@@ -30,6 +30,8 @@ class TopicResponse(BaseModel):
     status: str
     search_queries: list | None = None
     scheduled_date: str | None = None
+    has_remedial: bool = False
+    has_deep_dive: bool = False
 
 
 class CurriculumDetailResponse(BaseModel):
@@ -243,6 +245,14 @@ async def get_curriculum_detail(
             created_at=curriculum.created_at.isoformat() if curriculum.created_at else None,
         )
 
+    from app.models.learning import LearningModule
+    from sqlalchemy import select
+    modules_res = await db.execute(
+        select(LearningModule.topic_id, LearningModule.remedial_markdown, LearningModule.deep_dive_markdown)
+        .where(LearningModule.session_id == session_id)
+    )
+    module_info = {row[0]: (row[1] is not None, row[2] is not None) for row in modules_res.all()}
+
     topic_list = [
         TopicResponse(
             id=t.id,
@@ -253,6 +263,8 @@ async def get_curriculum_detail(
             status=t.status,
             search_queries=t.search_queries,
             scheduled_date=t.scheduled_date.isoformat() if t.scheduled_date else None,
+            has_remedial=module_info.get(t.id, (False, False))[0],
+            has_deep_dive=module_info.get(t.id, (False, False))[1],
         )
         for t in topics
     ]

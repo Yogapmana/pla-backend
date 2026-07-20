@@ -133,7 +133,7 @@ async def tutor_generate_quiz(
     topic_id: str,
     topic_title: str,
     language: str = "id",
-    num_questions: int = 5,
+    num_questions: int = 10,
     difficulty: str = "menengah",
 ) -> list[dict]:
     """
@@ -176,9 +176,11 @@ TINGKAT KESULITAN SOAL: {difficulty}
 - Mudah: Pertanyaan berfokus pada pengenalan konsep dan studi kasus sederhana yang aplikatif. Jangan hanya menanyakan definisi murni.
 - Menengah: Mengharuskan pengguna menganalisis hubungan antar konsep dan memecahkan skenario tingkat menengah.
 - Sulit: Fokus pada penyelesaian masalah kompleks, analisis mendalam, atau jebakan logika (trick questions) berdasarkan materi.)
-PENTING UNTUK VARIASI: 
-- Acak konsep yang kamu pilih dari materi (jangan hanya fokus pada paragraf pertama).
-- Buat soal yang berbeda dari yang biasanya kamu hasilkan agar pengguna tidak bosan saat mengulang kuis.
+PENTING UNTUK VARIASI DAN KREATIVITAS SOAL: 
+- Acak konsep yang kamu pilih dari materi secara ekstrim (jangan hanya fokus pada awal materi).
+- Buat soal dari sudut pandang yang berbeda, misalnya studi kasus penerapan, skenario error, atau perbandingan konsep.
+- Pastikan opsi jawaban pengecoh (distractor) sangat masuk akal, tidak terlalu mudah ditebak, dan memancing pemahaman mendalam.
+- JANGAN mengulang pola pertanyaan yang sama. Buat setiap soal terasa unik dan menguji aspek berbeda dari materi.
 
 MATERI:
 {context}
@@ -225,8 +227,8 @@ Hanya output JSON array, tanpa teks tambahan."""
             return []
         return parsed
 
-    # Set temperature to 0.7 for higher creativity and question variety
-    llm = get_llm(settings.TUTOR_MODEL, temperature=0.7)
+    # Set temperature to 0.9 for much higher creativity and extreme question variety
+    llm = get_llm(settings.TUTOR_MODEL, temperature=0.9)
 
     # First attempt — the normal prompt.
     response = llm.invoke(prompt)

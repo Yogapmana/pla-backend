@@ -34,3 +34,4 @@ class QuizResultResponse(BaseModel):
     correct_answers: int
     percentage: float
     feedback: str
+    cooldown_remaining_seconds: int = 0

@@ -11,9 +11,8 @@ def _should_replan(state: SynapsaState) -> str:
     been recorded AND the action requires curriculum revision.
 
     - "continue"  → skip replan (user has mastered the topic, proceed as planned)
-    - "repeat"    → replan with simpler material
-    - "review"    → replan to add a review session
-    - "accelerate"→ replan to skip ahead
+    - "remedial"  → replan with micro-remedial for wrong answers
+    - "enrichment"→ replan with deep dive technical case studies
     - empty list  → skip replan (initial pipeline, no feedback yet)
     """
     feedback_actions = state.get("feedback_actions") or []
@@ -22,7 +21,7 @@ def _should_replan(state: SynapsaState) -> str:
 
     latest = feedback_actions[-1]
     action = getattr(latest, "action", None)
-    if action in ("repeat", "review", "accelerate"):
+    if action in ("remedial", "enrichment"):
         return "replan"
     # "continue" or any unknown action — proceed to end without revising
     return "end"

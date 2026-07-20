@@ -9,13 +9,11 @@ def evaluate_mastery(score: float, topic_id: str) -> FeedbackAction:
     Menentukan aksi yang harus dilakukan Planner berdasarkan mastery score.
     """
     if score < 0.60:
-        action = "repeat"
-    elif score < 0.75:
-        action = "review"
-    elif score <= 0.90:
+        action = "remedial"
+    elif score <= 0.85:
         action = "continue"
     else:
-        action = "accelerate"
+        action = "enrichment"
         
     logger.info(f"[FEEDBACK] Topic: {topic_id} | Score: {score:.2f} -> Action: {action}")
     return FeedbackAction(action=action, topic_id=topic_id)

@@ -77,6 +77,7 @@ class ProgressSignals(BaseModel):
 class FeedbackAction(BaseModel):
     action: str
     topic_id: str
+    context: Optional[str] = None
 
 class AgentLog(BaseModel):
     timestamp: datetime

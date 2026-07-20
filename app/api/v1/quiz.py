@@ -43,16 +43,48 @@ async def get_quiz(
     topic = await verify_topic_owner(topic_id, current_user, db)
     session = await verify_session_owner(topic.session_id, current_user, db)
 
+    # Cooldown Logic: 10 mins for first fail, 5 mins for subsequent fails
+    from sqlalchemy import select
+    from datetime import datetime, timezone
+    quiz_results = await db.execute(
+        select(QuizResult)
+        .where(QuizResult.session_id == session.id, QuizResult.topic_id == topic_id)
+        .order_by(QuizResult.created_at.desc())
+    )
+    results = quiz_results.scalars().all()
+    failed_results = [r for r in results if r.score < 0.6]
+    
+    if failed_results and results[0].score < 0.6:
+        # The most recent attempt was a failure
+        fail_count = len(failed_results)
+        cooldown_mins = 10 if fail_count == 1 else 5
+        cooldown_seconds = cooldown_mins * 60
+        
+        # Calculate time passed since the last failure
+        last_failure_time = results[0].created_at
+        if last_failure_time.tzinfo is None:
+            last_failure_time = last_failure_time.replace(tzinfo=timezone.utc)
+        
+        now = datetime.now(timezone.utc)
+        elapsed = (now - last_failure_time).total_seconds()
+        
+        if elapsed < cooldown_seconds:
+            remaining = int(cooldown_seconds - elapsed)
+            raise HTTPException(
+                status_code=429,
+                detail={"message": "cooldown", "remaining_seconds": remaining}
+            )
+
     # Dynamic difficulty and question count based on mastery_score
     mastery = topic.mastery_score or 0.0
     
     # If the client explicitly sends a num_questions, we still respect it (or we can override).
     # Since we want it fully dynamic for the quiz flow, we'll calculate it if num_questions <= 5 (default).
     if mastery < 0.4:
-        dynamic_num = 5
+        dynamic_num = 10
         difficulty = "mudah"
     elif mastery < 0.7:
-        dynamic_num = 10
+        dynamic_num = 15
         difficulty = "menengah"
     else:
         dynamic_num = 20
@@ -232,12 +264,26 @@ async def submit_quiz(
     else:
         feedback = "Perlu lebih banyak latihan. Coba baca ulang materi dan diskusikan dengan Tutor AI."
 
+    cooldown_remaining_seconds = 0
+    if score < 0.6:
+        from sqlalchemy import select
+        quiz_results = await db.execute(
+            select(QuizResult)
+            .where(QuizResult.session_id == submission.session_id, QuizResult.topic_id == submission.topic_id)
+        )
+        results = quiz_results.scalars().all()
+        failed_count = sum(1 for r in results if r.score < 0.6)
+        # Because we just inserted the current one, failed_count includes it.
+        cooldown_mins = 10 if failed_count == 1 else 5
+        cooldown_remaining_seconds = cooldown_mins * 60
+
     return QuizResultResponse(
         score=score,
         total_questions=total,
         correct_answers=correct,
         percentage=percentage,
         feedback=feedback,
+        cooldown_remaining_seconds=cooldown_remaining_seconds,
     )
 
 
@@ -364,11 +410,65 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
                     user_id, topic_id, xp_awards,
                 )
 
+            # Execute supplementary generation if needed (remedial or enrichment)
+            if action.action in ("remedial", "enrichment"):
+                # Check if module already has the supplementary material
+                from app.models.learning import LearningModule as DBLearningModule
+                existing_module = (
+                    await db.execute(
+                        select(DBLearningModule)
+                        .where(DBLearningModule.topic_id == topic_id)
+                    )
+                ).scalar_one_or_none()
+                
+                needs_generation = True
+                if existing_module:
+                    if action.action == "remedial" and existing_module.remedial_markdown:
+                        needs_generation = False
+                        logger.info(f"[POST-QUIZ-EVAL] Remedial module already exists for {topic_id}, skipping generation.")
+                    elif action.action == "enrichment" and existing_module.deep_dive_markdown:
+                        needs_generation = False
+                        logger.info(f"[POST-QUIZ-EVAL] Enrichment (Deep Dive) module already exists for {topic_id}, skipping generation.")
+                        
+                if needs_generation:
+                    logger.info(f"[POST-QUIZ-EVAL] Action is {action.action}, triggering supplementary module generation...")
+                    
+                    context_str = ""
+                    if action.action == "remedial":
+                        from app.models.agent import QuizResult as DBQuizResult
+                        quiz_res = await db.execute(
+                            select(DBQuizResult)
+                            .where(DBQuizResult.session_id == uuid.UUID(session_id))
+                            .where(DBQuizResult.topic_id == topic_id)
+                            .order_by(DBQuizResult.created_at.desc())
+                        )
+                        latest_quiz = quiz_res.scalars().first()
+                        
+                        wrong_context = []
+                        if latest_quiz and latest_quiz.answers_detail:
+                            for detail in latest_quiz.answers_detail:
+                                if not detail.get("is_correct"):
+                                    q_text = detail.get("question_text", f"Topik soal ke-{detail.get('question_index', 0)+1}")
+                                    wrong_context.append(f"Q: {q_text}")
+                        
+                        if wrong_context:
+                            context_str = "Topik remedial harus difokuskan pada perbaikan pemahaman pertanyaan berikut: " + "; ".join(wrong_context)
+
+                    from app.tasks.generate_supplementary import generate_supplementary_module
+                    generate_supplementary_module.delay(
+                        session_id=session_id,
+                        user_id=user_id,
+                        topic_id=topic_id,
+                        supplementary_type="deep_dive" if action.action == "enrichment" else "remedial",
+                        context=context_str
+                    )
+
             await db.commit()
 
             # Always continue to the next topic IF they passed, removing the adaptive replan graph mutation.
             # The action (repeat, review, etc.) is still saved to the DB for frontend dashboard notifications.
-            if signals.quiz_score is not None and signals.quiz_score >= 0.60:
+            if not action or action.action != "remedial":
+                logger.info(f"[POST-QUIZ-EVAL] Triggering next module after {topic_id}...")
                 await trigger_next_module_after_quiz(uuid.UUID(session_id), user_id, topic_id, db)
             else:
                 logger.info(f"[POST-QUIZ-EVAL] Quiz score {signals.quiz_score} < 0.60, holding off on next module.")

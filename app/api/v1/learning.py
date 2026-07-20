@@ -61,6 +61,8 @@ class TopicResponse(BaseModel):
     scheduled_date: str | None = None
     feedback_action: str | None = None
     mastery_score: float | None = None
+    has_remedial: bool = False
+    has_deep_dive: bool = False
 
 
 class ModuleResponse(BaseModel):
@@ -68,6 +70,9 @@ class ModuleResponse(BaseModel):
     topic_id: str
     title: str
     content_markdown: str
+    remedial_markdown: str | None = None
+    deep_dive_markdown: str | None = None
+    content_version: int = 1
     sources: list | None = None
     word_count: int | None = None
     estimated_read_minutes: int | None = None
@@ -251,6 +256,15 @@ async def get_session_topics(
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Learning session not found")
     topics = await service.get_topics(session_id)
+    
+    from app.models.learning import LearningModule
+    from sqlalchemy import select
+    modules_res = await db.execute(
+        select(LearningModule.topic_id, LearningModule.remedial_markdown, LearningModule.deep_dive_markdown)
+        .where(LearningModule.session_id == session_id)
+    )
+    module_info = {row[0]: (row[1] is not None, row[2] is not None) for row in modules_res.all()}
+
     return [
         TopicResponse(
             id=t.id,
@@ -262,6 +276,8 @@ async def get_session_topics(
             scheduled_date=t.scheduled_date.isoformat() if t.scheduled_date else None,
             feedback_action=t.feedback_action,
             mastery_score=t.mastery_score,
+            has_remedial=module_info.get(t.id, (False, False))[0],
+            has_deep_dive=module_info.get(t.id, (False, False))[1],
         )
         for t in topics
     ]
@@ -287,6 +303,8 @@ async def get_topic_module(
         topic_id=module.topic_id,
         title=module.title,
         content_markdown=module.content_markdown,
+        remedial_markdown=module.remedial_markdown,
+        deep_dive_markdown=module.deep_dive_markdown,
         sources=module.sources,
         word_count=module.word_count,
         estimated_read_minutes=module.estimated_read_minutes,

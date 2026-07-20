@@ -53,6 +53,8 @@ async def get_module(
         session_id=str(module.session_id),
         title=module.title,
         content_markdown=module.content_markdown,
+        remedial_markdown=module.remedial_markdown,
+        deep_dive_markdown=module.deep_dive_markdown,
         sources=module.sources,
         word_count=module.word_count,
         estimated_read_minutes=module.estimated_read_minutes,

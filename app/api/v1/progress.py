@@ -235,6 +235,37 @@ async def evaluate_feedback(
         db_topic.material_rating_score = state_signals.material_rating
         db_topic.feedback_action = feedback_action.action
 
+    # Fetch context for remedial action
+    if feedback_action.action == "remedial":
+        from app.models.agent import QuizResult as DBQuizResult
+        from app.models.learning import LearningModule as DBModule
+        
+        quiz_res = await db.execute(
+            select(DBQuizResult)
+            .where(DBQuizResult.session_id == session_uuid)
+            .where(DBQuizResult.topic_id == topic_id)
+            .order_by(DBQuizResult.created_at.desc())
+        )
+        latest_quiz = quiz_res.scalars().first()
+        
+        mod_res = await db.execute(
+            select(DBModule)
+            .where(DBModule.session_id == session_uuid)
+            .where(DBModule.topic_id == topic_id)
+        )
+        db_mod = mod_res.scalars().first()
+        
+        wrong_context = []
+        if latest_quiz and latest_quiz.answers_detail:
+            for detail in latest_quiz.answers_detail:
+                if not detail.get("is_correct"):
+                    q_text = detail.get("question_text", f"Topik soal ke-{detail.get('question_index', 0)+1}")
+                    wrong_context.append(f"Q: {q_text}")
+        
+        if wrong_context:
+            feedback_action.context = "Topik remedial harus difokuskan pada perbaikan pemahaman pertanyaan berikut: " + "; ".join(wrong_context)
+
+
     # Lakukan Replanning jika ada kurikulum
     message = "Mastery evaluated. No replanning performed (no existing curriculum)."
 

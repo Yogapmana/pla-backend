@@ -49,7 +49,7 @@ def build_agent_tools(user_id: str, session_id: str):
             results = await jina_read_urls([url], timeout=20)
             if results and results[0].get("success"):
                 text = results[0]["text"]
-                return text[:4000] + ("..." if len(text) > 4000 else "")
+                return text[:15000] + ("..." if len(text) > 15000 else "")
             return f"Gagal membaca URL: {results[0].get('error', 'Unknown error') if results else 'Empty'}"
         except Exception as e:
             return f"Error scraping URL: {str(e)}"
@@ -113,8 +113,8 @@ def build_agent_tools(user_id: str, session_id: str):
                 return "Tidak ada hasil ditemukan di Wikipedia."
             blocks = []
             for i, r in enumerate(results, 1):
-                raw = str(r.get('summary', ''))
-                blocks.append(f"[{i}] {r.get('title', '')}\nURL: {r.get('url', '')}\n{raw[:1000]}...")
+                raw = str(r.get('raw_text', ''))
+                blocks.append(f"[{i}] {r.get('source_title', '')}\nURL: {r.get('source_url', '')}\n{raw[:1000]}...")
             return "\n\n".join(blocks)[:2000]
         except Exception as e:
             return f"Error: {e}"
@@ -129,8 +129,8 @@ def build_agent_tools(user_id: str, session_id: str):
                 return "Tidak ada transkrip yang ditemukan untuk video tersebut."
             blocks = []
             for i, r in enumerate(results, 1):
-                blocks.append(f"[{i}] {r.get('title', '')} ({r.get('author', '')})\n{str(r.get('transcript', ''))[:3000]}...")
-            return "\n\n".join(blocks)[:3000]
+                blocks.append(f"[{i}] {r.get('source_title', '')}\n{str(r.get('raw_text', ''))[:15000]}...")
+            return "\n\n".join(blocks)[:15000]
         except Exception as e:
             return f"Error: {e}"
 
