@@ -1,8 +1,10 @@
-from datetime import timedelta
+import secrets
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from pydantic import BaseModel, EmailStr
 from app.db.database import get_db
 from app.schemas.auth import UserCreate, UserResponse, Token, UserLanguageUpdate, UserProfileUpdate
 from app.models.user import User
@@ -10,12 +12,26 @@ from app.services.auth_service import get_password_hash, verify_password, create
 from app.services.streak_service import update_streak_on_login
 from app.dependencies import get_current_user
 from app.config import settings
-from app.tasks.email_tasks import send_welcome_email_task
+from app.tasks.email_tasks import (
+    send_welcome_email_task,
+    send_verification_email_task,
+    send_password_reset_email_task,
+)
 from google.oauth2 import id_token
 from google.auth.transport import requests
 import uuid
 
 router = APIRouter()
+
+
+def _generate_verification_code() -> str:
+    """Generate a 6-digit numeric OTP code."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _generate_reset_token() -> str:
+    """Generate a URL-safe random token for password reset."""
+    return secrets.token_urlsafe(48)
 
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
@@ -26,18 +42,24 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email already registered")
 
     hashed_password = get_password_hash(user_in.password)
+    code = _generate_verification_code()
+    code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+
     new_user = User(
         email=user_in.email,
         username=user_in.username,
         hashed_password=hashed_password,
         language_preference=user_in.language_preference,
+        verification_code=code,
+        verification_code_expires=code_expires,
+        is_verified=False,
     )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
-    
-    # Send welcome email asynchronously
-    send_welcome_email_task.delay(new_user.email, new_user.username)
+
+    # Send verification email asynchronously
+    send_verification_email_task.delay(new_user.email, new_user.username, code)
 
     # Create welcome notification
     from app.services.notification_service import NotificationService
@@ -50,22 +72,6 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         link="/dashboard"
     )
 
-    # NOTE: We intentionally do NOT call ``update_streak_on_login``
-    # here. Register creates the user with ``last_login_date=NULL``,
-    # so the user's first real login (the one right after
-    # Register) will see ``last_login is None`` and set streak=1
-    # with ``is_new_day=True`` — which triggers the welcome
-    # celebration modal. If we initialized the streak on
-    # Register, the very next login would be a same-day re-login
-    # (``is_new_day=False``) and the user would miss the "you
-    # started a streak!" moment.
-    #
-    # If we ever change the frontend to auto-login after Register
-    # (i.e. skip the /login step), we'll need to revisit this and
-    # re-enable the streak init here, plus handle the "celebration
-    # happens on the register response, not the login response"
-    # path in the auth store.
-
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": str(new_user.id)}, expires_delta=access_token_expires
@@ -74,11 +80,117 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         "access_token": access_token,
         "token_type": "bearer",
         "user": new_user,
-        # streak is None on Register — see the comment block above
-        # for why we don't initialize the streak here. The first
-        # login will populate it and queue the celebration.
         "streak": None,
     }
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+@router.post("/verify-email")
+async def verify_email(request: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    """Verify email with 6-digit OTP code."""
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    if user.is_verified:
+        return {"message": "Email already verified"}
+
+    if (
+        not user.verification_code
+        or not user.verification_code_expires
+        or user.verification_code != request.code
+    ):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    if datetime.now(timezone.utc) > user.verification_code_expires:
+        raise HTTPException(status_code=400, detail="Verification code has expired")
+
+    user.is_verified = True
+    user.verification_code = None
+    user.verification_code_expires = None
+    await db.commit()
+
+    return {"message": "Email verified successfully"}
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/resend-verification")
+async def resend_verification(request: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """Resend a new verification OTP code."""
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
+
+    if user.is_verified:
+        return {"message": "Email already verified"}
+
+    code = _generate_verification_code()
+    user.verification_code = code
+    user.verification_code_expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+    await db.commit()
+
+    send_verification_email_task.delay(user.email, user.username, code)
+    return {"message": "Verification code sent"}
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/forgot-password")
+async def forgot_password(request: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Send a password reset link to the user's email."""
+    result = await db.execute(select(User).where(User.email == request.email))
+    user = result.scalars().first()
+    if not user:
+        # Don't reveal whether email exists
+        return {"message": "If the email exists, a reset link has been sent"}
+
+    if user.auth_provider == "google":
+        return {"message": "If the email exists, a reset link has been sent"}
+
+    token = _generate_reset_token()
+    user.reset_token = token
+    user.reset_token_expires = datetime.now(timezone.utc) + timedelta(hours=1)
+    await db.commit()
+
+    reset_url = f"{settings.CORS_ORIGINS.split(',')[0]}/reset-password?token={token}"
+    send_password_reset_email_task.delay(user.email, user.username, reset_url)
+
+    return {"message": "If the email exists, a reset link has been sent"}
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+@router.post("/reset-password")
+async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Reset password using the token from email."""
+    result = await db.execute(select(User).where(User.reset_token == request.token))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    if datetime.now(timezone.utc) > user.reset_token_expires:
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    user.hashed_password = get_password_hash(request.password)
+    user.reset_token = None
+    user.reset_token_expires = None
+    await db.commit()
+
+    return {"message": "Password reset successfully"}
 
 
 @router.post("/login", response_model=Token)
@@ -90,6 +202,13 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Check email verification for local auth users
+    if user.auth_provider == "local" and not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your inbox for the verification code.",
         )
 
     # Update the user's daily login streak. The service mutates
@@ -241,6 +360,7 @@ async def google_auth(request: GoogleAuthRequest, db: AsyncSession = Depends(get
             hashed_password=None,
             auth_provider="google",
             google_id=google_id,
+            is_verified=True,  # Google OAuth users are auto-verified
         )
         db.add(user)
         await db.commit()

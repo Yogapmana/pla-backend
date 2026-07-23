@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, Integer, Date
+from datetime import datetime
+from sqlalchemy import Column, String, DateTime, Integer, Date, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -21,6 +22,17 @@ class User(Base):
         onupdate=func.now(),
     )
     language_preference = Column(String(10), default="id")
+
+    # ── Email verification ─────────────────────────────────────
+    # Users who register with email+password must verify before
+    # they can log in. Google OAuth users are auto-verified.
+    is_verified = Column(Boolean, default=False, server_default="false")
+    verification_code = Column(String(6), nullable=True, index=True)
+    verification_code_expires = Column(DateTime(timezone=True), nullable=True)
+
+    # ── Password reset ─────────────────────────────────────────
+    reset_token = Column(String(64), nullable=True, index=True)
+    reset_token_expires = Column(DateTime(timezone=True), nullable=True)
 
     # ── Gamification: daily login streak ────────────────────────
     # The streak is the number of consecutive days the user has

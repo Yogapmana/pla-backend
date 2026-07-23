@@ -21,6 +21,7 @@ import fitz  # PyMuPDF
 from app.services.learning_service import LearningService
 from app.tasks.run_orchestrator import run_learning_pipeline, resume_learning_pipeline
 from app.tasks.generate_module import generate_module_for_topic
+from app.tasks.email_tasks import send_progress_email_task
 
 router = APIRouter()
 
@@ -431,6 +432,8 @@ async def complete_topic(
     
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
 
+    # Send progress email asynchronously
+    send_progress_email_task.delay(current_user.email, current_user.username, topic.title)
 
     next_topic = await service.activate_next_topic(session_id, topic_id)
 
