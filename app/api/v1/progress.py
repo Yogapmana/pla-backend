@@ -11,9 +11,8 @@ from app.dependencies import get_current_user, verify_session_owner, verify_topi
 from app.models.agent import ProgressSignal as DBProgressSignal, QuizResult as DBQuizResult
 from app.models.learning import LearningSession as DBLearningSession, Topic as DBTopic
 from app.models.user import User
-from app.agents.state import ProgressSignals, SynapsaState
+from app.agents.state import ProgressSignals
 from app.agents.feedback_engine import run_feedback_loop
-from app.agents.planner import replan_node
 from app.schemas.progress import UserMetricsResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -180,9 +179,12 @@ async def evaluate_feedback(
     Trigger Feedback Engine:
     1. Ambil semua progress signals untuk topic_id di session_id.
     2. Hitung mastery score.
-    3. Tentukan FeedbackAction.
-    4. Simpan MasteryScore ke database.
-    5. Panggil replan_node untuk merevisi jadwal.
+    3. Tentukan FeedbackAction (remedial / continue / enrichment).
+    4. Simpan mastery + signal breakdown ke topic row.
+
+    Curriculum replan is intentionally NOT performed here. Adaptive
+    content is delivered as supplementary modules (remedial / deep-dive)
+    via the quiz post-eval path.
     """
     # Ownership: session + topic must both belong to the caller (and the
     # topic must be scoped to this session). Guards run before any reads,
@@ -265,63 +267,14 @@ async def evaluate_feedback(
         if wrong_context:
             feedback_action.context = "Topik remedial harus difokuskan pada perbaikan pemahaman pertanyaan berikut: " + "; ".join(wrong_context)
 
-
-    # Lakukan Replanning jika ada kurikulum
-    message = "Mastery evaluated. No replanning performed (no existing curriculum)."
-
-    from app.models.learning import Curriculum as DBCurriculum
-    curr_result = await db.execute(
-        select(DBCurriculum)
-        .where(DBCurriculum.session_id == session_uuid)
-        .order_by(DBCurriculum.version.desc())
-    )
-    db_curriculum = curr_result.scalars().first()
-
-    if db_curriculum and db_curriculum.curriculum_json:
-        try:
-            from app.agents.state import Curriculum
-            # Rekonstruksi state
-            curriculum_obj = Curriculum.model_validate(db_curriculum.curriculum_json)
-
-            # Buat dummy state
-            state: SynapsaState = {
-                "user_id": str(session.user_id),
-                "session_id": str(session.id),
-                "learning_config": None, # tidak terlalu butuh untuk replan jika curriculum ada
-                "curriculum": curriculum_obj,
-                "research_results": [],
-                "modules": [],
-                "chat_history": [],
-                "quiz_results": [],
-                "mastery_scores": {topic_id: mastery_score},
-                "progress_signals": state_signals,
-                "feedback_actions": [feedback_action],
-                "agent_logs": []
-            }
-
-            # Panggil replan_node
-            new_state = replan_node(state)
-
-            # Simpan kurikulum yang baru sebagai versi baru
-            if new_state["curriculum"]:
-                new_db_curr = DBCurriculum(
-                    id=uuid.uuid4(),
-                    session_id=session_uuid,
-                    version=db_curriculum.version + 1,
-                    curriculum_json=new_state["curriculum"].model_dump()
-                )
-                db.add(new_db_curr)
-                message = f"Mastery evaluated. Curriculum revised based on action: {feedback_action.action}"
-
-        except Exception as e:
-            message = f"Mastery evaluated but replanning failed: {str(e)}"
-
+    # Curriculum replan intentionally disabled — adaptive path is
+    # remedial / deep-dive supplementary modules only (see quiz post-eval).
     await db.commit()
 
     return EvaluateResponse(
         mastery_score=mastery_score,
         feedback_action=feedback_action.action,
-        message=message
+        message="Mastery evaluated.",
     )
 
 @router.get("/topic-unlock/{session_id}/{topic_id}", response_model=TopicUnlockStatusResponse)

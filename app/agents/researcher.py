@@ -14,7 +14,7 @@ from app.tools.course_discovery import discover_courses
 logger = logging.getLogger(__name__)
 
 
-async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
+async def run_tools_for_query(query: str, topic_id: str, language: str = "id") -> List[RawContent]:
     """
     Layered scraping strategy per PRD:
     1. Tavily search → discover URLs + snippets
@@ -24,15 +24,23 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
     """
     raw_contents: List[RawContent] = []
 
+    # Format language instruction for web queries if needed
+    lang_instruction = " (in English)" if language == "en" else " (dalam bahasa Indonesia)"
+
     # --- Layer 1: Tavily + Wikipedia + Arxiv + YouTube discovery (parallel) ---
-    # YouTube discovery: ask Tavily for "best YouTube video URL for {query}",
-    # then fetch the transcript of the top result. Enriches the multi-source mix.
-    discovery_query = f"best youtube video tutorial explaining {query}"
+    # YouTube discovery: ask Tavily for video tutorials in the appropriate language
+    if language == "id":
+        discovery_query = f"video tutorial youtube terbaik yang menjelaskan tentang {query}"
+        tavily_query = f"{query} (dalam bahasa Indonesia)"
+    else:
+        discovery_query = f"best youtube video tutorial explaining {query}"
+        tavily_query = f"{query} (in English)"
+    
     tasks = [
-        tavily_search_tool.ainvoke({"query": query}),
-        wikipedia_search_tool.ainvoke({"query": query}),
+        tavily_search_tool.ainvoke({"query": tavily_query, "language": language}),
+        wikipedia_search_tool.ainvoke({"query": query, "language": language}),
         arxiv_search_tool.ainvoke({"query": query}),
-        tavily_search_tool.ainvoke({"query": discovery_query}),
+        tavily_search_tool.ainvoke({"query": discovery_query, "language": language}),
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -164,6 +172,9 @@ async def run_tools_for_query(query: str, topic_id: str) -> List[RawContent]:
 
 async def researcher_node(state: SynapsaState) -> SynapsaState:
     curriculum = state.get("curriculum")
+    config = state.get("learning_config")
+    language = config.language if config else "id"
+    
     if not curriculum:
         return {}
 
@@ -206,7 +217,7 @@ async def researcher_node(state: SynapsaState) -> SynapsaState:
     
     async def sem_run(q):
         async with sem:
-            return await run_tools_for_query(q, target_topic.topic_id)
+            return await run_tools_for_query(q, target_topic.topic_id, language)
             
     query_tasks = [sem_run(q) for q in queries]
     query_results = await asyncio.gather(*query_tasks)

@@ -1,12 +1,12 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_MIN_SECRET_LEN = 32
 
 
 class Settings(BaseSettings):
     # Database PostgreSQL
-    DATABASE_URL: str = Field(
-        default="postgresql+asyncpg://pla_user:pla_password@localhost:5433/pla_db"
-    )
+    DATABASE_URL: str = Field(default="")
 
     # Vector DB & Redis
     QDRANT_URL: str = Field(default="http://localhost:6333")
@@ -20,7 +20,9 @@ class Settings(BaseSettings):
 
     def cors_origins_list(self) -> list[str]:
         """Parse CORS_ORIGINS into a list of allowed origin strings."""
-        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+        return [
+            origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()
+        ]
 
     # LLM Providers
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
@@ -45,8 +47,8 @@ class Settings(BaseSettings):
     IMAGE_WIDTH: int = Field(default=800)
     IMAGE_HEIGHT: int = Field(default=400)
 
-    # Keamanan & Auth
-    SECRET_KEY: str = Field(default="bikin_rahasia_bebas_contoh_1234567890")
+    # Keamanan & Auth — set SECRET_KEY in .env (min 32 chars)
+    SECRET_KEY: str = Field(default="")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=1440)
     GOOGLE_CLIENT_ID: str = Field(default="")
 
@@ -57,6 +59,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def secret_key_required(cls, v: str) -> str:
+        key = (v or "").strip()
+        if len(key) < _MIN_SECRET_LEN:
+            raise ValueError(
+                f"SECRET_KEY must be set in .env and at least {_MIN_SECRET_LEN} characters "
+                f"(got {len(key)}). Generate with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        return key
 
 
 settings = Settings()

@@ -15,6 +15,10 @@ class UserLanguageUpdate(BaseModel):
     language_preference: str
 
 
+class UserProfileUpdate(BaseModel):
+    username: str
+
+
 class UserResponse(BaseModel):
     id: UUID
     username: str

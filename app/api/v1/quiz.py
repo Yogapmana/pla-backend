@@ -52,9 +52,9 @@ async def get_quiz(
         .order_by(QuizResult.created_at.desc())
     )
     results = quiz_results.scalars().all()
-    failed_results = [r for r in results if r.score < 0.6]
+    failed_results = [r for r in results if r.score < 0.8]
     
-    if failed_results and results[0].score < 0.6:
+    if failed_results and results[0].score < 0.8:
         # The most recent attempt was a failure
         fail_count = len(failed_results)
         cooldown_mins = 10 if fail_count == 1 else 5
@@ -257,25 +257,50 @@ async def submit_quiz(
     )
 
     # Generate feedback
-    if percentage >= 80:
+    if percentage >= 90:
         feedback = "Luar biasa! Anda telah menguasai materi ini dengan sangat baik."
-    elif percentage >= 60:
+    elif percentage >= 80:
         feedback = "Bagus! Anda memahami sebagian besar materi. Tinjau kembali bagian yang masih salah."
     else:
         feedback = "Perlu lebih banyak latihan. Coba baca ulang materi dan diskusikan dengan Tutor AI."
 
     cooldown_remaining_seconds = 0
-    if score < 0.6:
+    if score < 0.8:
         from sqlalchemy import select
         quiz_results = await db.execute(
             select(QuizResult)
             .where(QuizResult.session_id == submission.session_id, QuizResult.topic_id == submission.topic_id)
         )
         results = quiz_results.scalars().all()
-        failed_count = sum(1 for r in results if r.score < 0.6)
+        failed_count = sum(1 for r in results if r.score < 0.8)
         # Because we just inserted the current one, failed_count includes it.
         cooldown_mins = 10 if failed_count == 1 else 5
         cooldown_remaining_seconds = cooldown_mins * 60
+
+    from sqlalchemy import select
+    from app.models.agent import ProgressSignal
+    from app.agents.feedback_engine import calculate_mastery, evaluate_mastery
+    from app.agents.state import ProgressSignals
+
+    signal_result = await db.execute(
+        select(ProgressSignal)
+        .where(ProgressSignal.session_id == submission.session_id)
+        .where(ProgressSignal.topic_id == submission.topic_id)
+        .order_by(ProgressSignal.created_at.asc())
+    )
+    db_signals = signal_result.scalars().all()
+    agg_signals = {s.signal_type: s.value for s in db_signals}
+    agg_signals["quiz_score"] = score
+    
+    signals = ProgressSignals(
+        quiz_score=agg_signals.get("quiz_score"),
+        reading_time_ratio=agg_signals.get("reading_time_ratio"),
+        question_frequency=agg_signals.get("question_frequency"),
+        self_assessment=agg_signals.get("self_assessment"),
+        material_rating=agg_signals.get("material_rating")
+    )
+    mastery = calculate_mastery(signals)
+    feedback_action_val = evaluate_mastery(mastery, submission.topic_id).action
 
     return QuizResultResponse(
         score=score,
@@ -284,17 +309,43 @@ async def submit_quiz(
         percentage=percentage,
         feedback=feedback,
         cooldown_remaining_seconds=cooldown_remaining_seconds,
+        feedback_action=feedback_action_val,
     )
 
 
 async def trigger_next_module_after_quiz(session_id: uuid.UUID, user_id: str, topic_id: str, db: AsyncSession):
     """
-    Trigger module generation for the next topic.
+    Mark the passed topic as completed, activate the next topic, and
+    kick off module generation for that next topic.
+
+    Passing a quiz (score >= 0.80) is the source of truth for completion —
+    the current topic must flip to ``completed`` even if the user never
+    clicks "Lanjut Topik Berikutnya" on the quiz result screen.
     """
     import logging
+    from datetime import datetime, timezone
+
     logger = logging.getLogger(__name__)
 
     service = LearningService(db)
+
+    # 1) Complete the topic the user just passed.
+    current = await service.get_topic(topic_id)
+    if current is None:
+        logger.warning(f"[EVALUATION] Topic {topic_id} not found while completing after quiz")
+        return
+
+    if current.status != "completed":
+        current.status = "completed"
+        if current.completed_at is None:
+            current.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(current)
+        logger.info(f"[EVALUATION] Marked topic {topic_id} as completed after quiz pass")
+    else:
+        logger.info(f"[EVALUATION] Topic {topic_id} already completed")
+
+    # 2) Unlock / activate the next curriculum topic.
     next_topic = await service.activate_next_topic(session_id, topic_id)
 
     if next_topic:
@@ -409,6 +460,20 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
                     "[POST-QUIZ-EVAL] user=%s topic=%s xp_awards=%s",
                     user_id, topic_id, xp_awards,
                 )
+                
+                # Check for level up
+                leveled_up_events = [a for a in xp_awards if a.get("leveled_up")]
+                if leveled_up_events:
+                    new_level = leveled_up_events[-1].get("new_level")
+                    from app.services.notification_service import NotificationService
+                    notif_service = NotificationService(db)
+                    await notif_service.create_notification(
+                        user_id=user_id,
+                        title=f"Naik Level: Level {new_level}!",
+                        message=f"Selamat! Anda berhasil mencapai Level {new_level}.",
+                        notification_type="level_up",
+                        link="/dashboard"
+                    )
 
             # Execute supplementary generation if needed (remedial or enrichment)
             if action.action in ("remedial", "enrichment"):
@@ -465,13 +530,14 @@ async def _run_post_quiz_evaluation(session_id: str, user_id: str, topic_id: str
 
             await db.commit()
 
-            # Always continue to the next topic IF they passed, removing the adaptive replan graph mutation.
-            # The action (repeat, review, etc.) is still saved to the DB for frontend dashboard notifications.
-            if not action or action.action != "remedial":
-                logger.info(f"[POST-QUIZ-EVAL] Triggering next module after {topic_id}...")
+            # Lulus topik ditentukan OLEH quiz_score >= 0.80
+            quiz_passed = (signals.quiz_score is not None and signals.quiz_score >= 0.80)
+            
+            if quiz_passed:
+                logger.info(f"[POST-QUIZ-EVAL] Quiz passed (>= 0.80). Triggering next module after {topic_id}...")
                 await trigger_next_module_after_quiz(uuid.UUID(session_id), user_id, topic_id, db)
             else:
-                logger.info(f"[POST-QUIZ-EVAL] Quiz score {signals.quiz_score} < 0.60, holding off on next module.")
+                logger.info(f"[POST-QUIZ-EVAL] Quiz score {signals.quiz_score} < 0.80, holding off on next module.")
                 
             await engine.dispose()
     except Exception as e:

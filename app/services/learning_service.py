@@ -213,7 +213,26 @@ class LearningService:
             .where(Topic.session_id == session_id)
             .order_by(Topic.week_number, Topic.day_number)
         )
-        return list(result.scalars().all())
+        topics = list(result.scalars().all())
+
+        # Self-heal: a quiz pass (score >= 0.80) is completion. Older runs
+        # unlocked the next topic without flipping the current one off
+        # ``active``, which left two "Aktif" cards in the curriculum UI.
+        dirty = False
+        for topic in topics:
+            if (
+                topic.status != "completed"
+                and topic.quiz_score is not None
+                and topic.quiz_score >= 0.80
+            ):
+                topic.status = "completed"
+                if topic.completed_at is None:
+                    topic.completed_at = datetime.now(timezone.utc)
+                dirty = True
+        if dirty:
+            await self.db.commit()
+
+        return topics
 
     async def save_module(self, topic_id: str, session_id: UUID, title: str, content_markdown: str, sources: list | None = None) -> LearningModule:
         module = LearningModule(

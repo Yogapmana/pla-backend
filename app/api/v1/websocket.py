@@ -1,10 +1,17 @@
 import asyncio
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from sqlalchemy import select
 import jwt
 from app.config import settings
+from app.db.database import SessionLocal
+from app.models.agent import AgentLog
+from app.models.learning import LearningSession
 from app.utils.log_broker import subscribe_to_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -22,11 +29,12 @@ class ConnectionManager:
         self.active_connections[session_id].append(websocket)
 
     def disconnect(self, session_id: str, websocket: WebSocket):
-        if session_id in self.active_connections:
-            if websocket in self.active_connections[session_id]:
-                self.active_connections[session_id].remove(websocket)
-            if not self.active_connections[session_id]:
-                del self.active_connections[session_id]
+        if session_id not in self.active_connections:
+            return
+        if websocket in self.active_connections[session_id]:
+            self.active_connections[session_id].remove(websocket)
+        if not self.active_connections[session_id]:
+            del self.active_connections[session_id]
 
     async def broadcast(self, session_id: str, message: dict):
         if session_id not in self.active_connections:
@@ -58,6 +66,30 @@ async def verify_ws_token(token: str) -> str | None:
         return None
 
 
+async def fetch_agent_log_history(session_uuid: UUID) -> list[dict]:
+    """Load persisted agent logs for reconnect / refresh resume."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(AgentLog)
+            .where(AgentLog.session_id == session_uuid)
+            .order_by(AgentLog.created_at.asc())
+        )
+        rows = list(result.scalars().all())
+
+    return [
+        {
+            "type": "agent_log",
+            "id": str(row.id),
+            "timestamp": row.created_at.isoformat() if row.created_at else None,
+            "agent": row.agent,
+            "level": row.level,
+            "message": row.message,
+            "metadata": row.metadata_json,
+        }
+        for row in rows
+    ]
+
+
 @router.websocket("/ws/agent-log/{session_id}")
 async def agent_log_stream(
     websocket: WebSocket,
@@ -71,11 +103,10 @@ async def agent_log_stream(
 
     The server:
     1. Sends {"type": "connected", "session_id": "..."} on connect.
-    2. Subscribes to Redis pub/sub channel `pla:agent-logs:{session_id}` and
-       forwards every message to the in-process ConnectionManager, which
-       broadcasts to all WebSockets for that session.
-    3. Runs the subscriber as a background asyncio task so the main coroutine
-       can keep the connection alive.
+    2. Replays historical agent_logs from Postgres so tab-switch / refresh
+       clients resume progress instead of starting from an empty stream.
+    3. Subscribes to Redis pub/sub channel `pla:agent-logs:{session_id}` and
+       forwards live messages for this session.
     4. Cancels the subscriber and cleans up on disconnect.
     """
     user_id = await verify_ws_token(token)
@@ -89,11 +120,25 @@ async def agent_log_stream(
         await websocket.close(code=4002, reason="Invalid session_id")
         return
 
+    # Ownership: any valid JWT must not stream another user's agent logs.
+    # Check BEFORE accept so non-owners never get a live socket or history.
+    try:
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(LearningSession).where(LearningSession.id == session_uuid)
+            )
+            session = result.scalars().first()
+    except Exception as e:
+        logger.warning(f"[WS] ownership lookup failed for {session_id}: {e}")
+        await websocket.close(code=1011, reason="Server error")
+        return
+
+    if session is None or str(session.user_id) != str(user_id):
+        await websocket.close(code=4003, reason="Forbidden")
+        return
+
     await manager.connect(session_id, websocket)
 
-    # Forwarder callback: receives a parsed log dict from the broker and
-    # pushes it to every WebSocket subscribed to this session_id in this
-    # process. This is safe to call concurrently from the broker task.
     async def forward_log(payload: dict) -> None:
         await websocket.send_json(payload)
 
@@ -101,17 +146,19 @@ async def agent_log_stream(
     try:
         await websocket.send_json({"type": "connected", "session_id": session_id})
 
-        # Spawn the Redis subscriber as a background task.
+        # History first so the client restores stage/logs before live events.
+        try:
+            history = await fetch_agent_log_history(session_uuid)
+            if history:
+                await websocket.send_json({"type": "history", "logs": history})
+        except Exception as e:
+            logger.warning(f"[WS] history replay failed for {session_id}: {e}")
+
         subscriber_task = asyncio.create_task(
             subscribe_to_session(session_id, forward_log)
         )
 
-        # Keep the connection alive. The subscriber runs concurrently and
-        # pushes messages via the WebSocket. We just need to wait for the
-        # client to disconnect (or for an error to occur).
         while True:
-            # The client isn't expected to send anything meaningful here,
-            # but reading lets us detect a clean close vs a network drop.
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass

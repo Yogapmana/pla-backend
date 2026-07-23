@@ -3,3 +3,4 @@ from app.models.learning import LearningSession, Curriculum, Topic, LearningModu
 from app.models.agent import ChatMessage, QuizResult, ProgressSignal
 from app.models.login_event import LoginEvent
 from app.models.xp_event import XpEvent
+from app.models.notification import Notification

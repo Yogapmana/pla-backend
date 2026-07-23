@@ -2,7 +2,7 @@ from uuid import UUID
 import uuid
 import logging
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Form, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Form, File, UploadFile, status
 from typing import List
 from fastapi_cache.decorator import cache
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +33,10 @@ class LearningStartRequest(BaseModel):
     language: str = "id"
 
 
+class LanguageUpdateRequest(BaseModel):
+    language: str
+
+
 class LearningSessionResponse(BaseModel):
     id: str
     topic: str
@@ -59,8 +63,10 @@ class TopicResponse(BaseModel):
     duration_minutes: int
     status: str
     scheduled_date: str | None = None
+    completed_at: str | None = None
     feedback_action: str | None = None
     mastery_score: float | None = None
+    quiz_score: float | None = None
     has_remedial: bool = False
     has_deep_dive: bool = False
 
@@ -76,6 +82,15 @@ class ModuleResponse(BaseModel):
     sources: list | None = None
     word_count: int | None = None
     estimated_read_minutes: int | None = None
+    created_at: str | None = None
+
+
+class AgentLogResponse(BaseModel):
+    id: str
+    agent: str
+    level: str
+    message: str
+    metadata: dict | None = None
     created_at: str | None = None
 
 
@@ -96,6 +111,14 @@ async def start_learning_session(
     (Planner → Researcher → Composer) as a Celery background task.
     """
     service = LearningService(db)
+
+    # Check session limit
+    existing_sessions = await service.get_sessions(current_user.id)
+    if len(existing_sessions) >= 3:
+        raise HTTPException(
+            status_code=400, 
+            detail="Batas maksimal sesi belajar tercapai (maksimal 3). Selesaikan atau hapus sesi yang ada terlebih dahulu."
+        )
 
     # Process uploaded files (extract text from PDFs)
     context_text = ""
@@ -175,6 +198,25 @@ async def resume_learning_session(
     return {"status": "resumed", "session_id": str(session_id)}
 
 
+@router.patch("/{session_id}/language")
+async def update_session_language(
+    session_id: UUID,
+    request: LanguageUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the language preference for an ongoing learning session."""
+    service = LearningService(db)
+    session = await service.get_session(session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+        
+    session.language = request.language
+    await db.commit()
+    
+    return {"status": "ok", "language": session.language}
+
+
 @router.get("/sessions", response_model=list[LearningSessionResponse])
 async def list_learning_sessions(
     current_user: User = Depends(get_current_user),
@@ -219,6 +261,52 @@ async def get_learning_session(
         status=session.status,
         created_at=session.created_at.isoformat() if session.created_at else None,
     )
+
+
+@router.get("/{session_id}/agent-logs", response_model=list[AgentLogResponse])
+async def get_session_agent_logs(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Persisted agent pipeline logs for a session.
+
+    Used by the agent stream UI to restore progress after tab switch / refresh
+    without waiting for the next live WebSocket event.
+    """
+    service = LearningService(db)
+    session = await service.get_session(session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+
+    logs = await service.get_agent_logs(session_id)
+    return [
+        AgentLogResponse(
+            id=str(log.id),
+            agent=log.agent,
+            level=log.level,
+            message=log.message,
+            metadata=log.metadata_json,
+            created_at=log.created_at.isoformat() if log.created_at else None,
+        )
+        for log in logs
+    ]
+
+
+@router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_learning_session(
+    session_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a learning session owned by the current user."""
+    service = LearningService(db)
+    session = await service.get_session(session_id)
+    if not session or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Learning session not found")
+    await service.delete_session(session_id)
+    return None
 
 
 @router.get("/{session_id}/curriculum", response_model=CurriculumResponse)
@@ -274,8 +362,10 @@ async def get_session_topics(
             duration_minutes=t.duration_minutes,
             status=t.status,
             scheduled_date=t.scheduled_date.isoformat() if t.scheduled_date else None,
+            completed_at=t.completed_at.isoformat() if t.completed_at else None,
             feedback_action=t.feedback_action,
             mastery_score=t.mastery_score,
+            quiz_score=t.quiz_score,
             has_remedial=module_info.get(t.id, (False, False))[0],
             has_deep_dive=module_info.get(t.id, (False, False))[1],
         )
@@ -333,9 +423,9 @@ async def complete_topic(
     if not topic_to_check:
         raise HTTPException(status_code=404, detail="Topic not found")
         
-    # Validasi skor kuis minimal 60%
-    if topic_to_check.quiz_score is None or topic_to_check.quiz_score < 0.60:
-        raise HTTPException(status_code=403, detail="Anda harus lulus kuis (minimal 60%) untuk lanjut ke materi berikutnya.")
+    # Validasi skor kuis minimal 80%
+    if topic_to_check.quiz_score is None or topic_to_check.quiz_score < 0.80:
+        raise HTTPException(status_code=403, detail="Anda harus lulus kuis (minimal 80%) untuk lanjut ke materi berikutnya.")
         
     topic = await service.update_topic_status(topic_id, "completed")
     

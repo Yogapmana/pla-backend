@@ -9,45 +9,46 @@ import logging
 logger = logging.getLogger(__name__)
 
 PLANNER_PROMPT = """
-Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
-Tugas Anda adalah memecah topik pembelajaran secara adaptif menjadi sebuah kurikulum terstruktur.
+You are an advanced AI Planner in a Personal Learning Agent system.
+Your task is to adaptively break down a learning topic into a structured curriculum.
 
-Informasi Pembelajaran Pengguna:
-- Topik: {topic}
-- Durasi: {duration_weeks} minggu
+User's Learning Information:
+- Topic: {topic}
+- Duration: {duration_weeks} weeks
 - Level: {level}
-- Jam per hari: {hours_per_day} jam
-- Bahasa: {language}
+- Hours per day: {hours_per_day} hours
+- Language: {language}
 
 {context_text_instruction}
 
-Aturan:
-1. Bagi topik ini secara bertahap dari konsep dasar hingga konsep lanjutan (sesuai level).
-2. Tentukan jadwal belajar untuk setiap minggu dan hari (misal jika ada 5 hari belajar efektif seminggu, bagi materinya).
-3. Buatlah list `search_queries` yang relevan untuk setiap sub-topik agar Researcher Agent dapat mengumpulkan materi. Query sebaiknya dalam bahasa Inggris jika topik umum di IT/Science agar materi lebih kaya, tapi sesuaikan dengan konteks.
-4. Estimasi durasi dalam menit per topik harian (total durasi harian tidak boleh melebihi {hours_per_day} jam, atau 60 * {hours_per_day} menit).
-5. KEMBALIKAN OUTPUT DALAM FORMAT JSON SESUAI DENGAN SKEMA YANG DIMINTA.
-6. PENTING: KUNCI JSON (JSON KEYS) HARUS SAMA PERSIS DENGAN SKEMA. JANGAN TERJEMAHKAN KUNCI JSON.
-7. KEWAJIBAN MUTLAK: Anda HARUS meng-generate array `weeks` TEPAT SEBANYAK {duration_weeks} minggu. Jika durasi adalah 12 minggu, maka harus ada 12 elemen di dalam `weeks`. Jangan pernah mengurangi atau meringkas jumlah minggu!
-8. SEMUA TEKS KONTEN (judul, deskripsi, dll kecuali search_queries dan keys JSON) WAJIB DITULIS DALAM BAHASA: {language}.
-Anda WAJIB mengikuti format JSON persis seperti contoh ini (jangan kurangi atau ubah key-nya):
+Rules:
+1. Break down this topic progressively from basic concepts to advanced concepts (according to the level).
+2. Determine a study schedule for each week and day (for example, if there are 5 effective study days a week, divide the material).
+3. Create a list of relevant `search_queries` for each sub-topic so the Researcher Agent can gather materials. CRITICAL: The search queries MUST be written in the target language: {language}. Do NOT write English queries if {language} is not English, otherwise the user will get sources in the wrong language.
+4. Estimate the duration in minutes per daily topic (the total daily duration must not exceed {hours_per_day} hours, or 60 * {hours_per_day} minutes).
+5. RETURN THE OUTPUT IN JSON FORMAT ACCORDING TO THE REQUESTED SCHEMA.
+6. IMPORTANT: THE JSON KEYS MUST EXACTLY MATCH THE SCHEMA. DO NOT TRANSLATE THE JSON KEYS.
+7. ABSOLUTE OBLIGATION: You MUST generate an array of `weeks` EXACTLY MATCHING {duration_weeks} weeks. If the duration is 12 weeks, there must be 12 elements inside `weeks`. Never reduce or summarize the number of weeks!
+8. ALL CONTENT TEXT (titles, descriptions, etc. except search_queries and JSON keys) MUST BE WRITTEN IN THE LANGUAGE: {language}.
+
+You MUST follow the JSON format exactly like this example (do not remove or change the keys):
 ```json
 {{
-  "curriculum_id": "string acak atau format ID",
+  "curriculum_id": "random string or ID format",
   "topic": "{topic}",
-  "total_weeks": angka,
+  "total_weeks": number,
   "weeks": [
     {{
       "week": 1,
-      "title": "Judul Minggu",
+      "title": "Week Title",
       "days": [
         {{
           "day": 1,
-          "topic_id": "ID Topik",
-          "title": "Judul Topik Harian",
-          "description": "Deskripsi topik",
-          "search_queries": ["query pencarian inggris"],
-          "duration_minutes": angka,
+          "topic_id": "Topic ID",
+          "title": "Daily Topic Title",
+          "description": "Topic description",
+          "search_queries": ["english search query"],
+          "duration_minutes": number,
           "status": "pending"
         }}
       ]
@@ -89,7 +90,7 @@ def planner_node(state: SynapsaState) -> SynapsaState:
     
     context_text_instruction = ""
     if config.context_text:
-        context_text_instruction = f"\nDokumen Referensi / Roadmap dari User:\n{config.context_text}\n\nPENTING: Gunakan dokumen referensi/roadmap di atas sebagai acuan utama dalam menyusun urutan, struktur, dan cakupan topik kurikulum.\n"
+        context_text_instruction = f"\nUser Reference Document / Roadmap:\n{config.context_text}\n\nIMPORTANT: Use the reference document/roadmap above as the primary guide in structuring the sequence, outline, and scope of the curriculum topics.\n"
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -148,30 +149,30 @@ def planner_node(state: SynapsaState) -> SynapsaState:
 
 
 REPLAN_PROMPT = """
-Anda adalah AI Planner tingkat lanjut dalam sistem Personal Learning Agent.
-Tugas Anda adalah membuat SATU TOPIK BARU (modul pembelajaran tunggal) untuk disisipkan ke dalam kurikulum pembelajaran pengguna berdasarkan evaluasi Mastery Score.
+You are an advanced AI Planner in a Personal Learning Agent system.
+Your task is to create ONE NEW TOPIC (a single learning module) to be inserted into the user's learning curriculum based on their Mastery Score evaluation.
 
-Topik Utama Kurikulum: {topic}
-Konteks Kesalahan Kuis: {context}
+Main Curriculum Topic: {topic}
+Quiz Error Context: {context}
 
-Topik Terakhir yang diselesaikan (Target ID: {target_topic_id}):
+Last completed topic (Target ID: {target_topic_id}):
 {current_topic_json}
 
-Tindakan yang harus dilakukan (Action): {action}
-Aturan:
-1. Jika action "remedial": Buatlah topik "Micro-Remedial" berdurasi 15-20 menit yang HANYA berfokus untuk membahas dan memperbaiki konsep yang salah berdasarkan 'Konteks Kesalahan Kuis'.
-2. Jika action "enrichment": Buatlah topik "Deep Dive / Pengayaan" berdurasi 20-30 menit berupa studi kasus teknis atau materi tingkat lanjut lanjutan dari topik terakhir.
-3. KEMBALIKAN OUTPUT DALAM FORMAT JSON SESUAI DENGAN SKEMA.
-4. SEMUA TEKS KONTEN (judul, deskripsi) WAJIB DALAM BAHASA: {language}.
+Action to be taken: {action}
+Rules:
+1. If the action is "remedial": Create a "Micro-Remedial" topic with a duration of 15-20 minutes that ONLY focuses on discussing and correcting the erroneous concepts based on the 'Quiz Error Context'.
+2. If the action is "enrichment": Create a "Deep Dive / Enrichment" topic with a duration of 20-30 minutes containing technical case studies or advanced materials following up on the last topic.
+3. RETURN THE OUTPUT IN JSON FORMAT ACCORDING TO THE SCHEMA.
+4. ALL CONTENT TEXT (titles, descriptions) MUST BE IN THE LANGUAGE: {language}.
 
-Anda WAJIB mengikuti format JSON persis seperti contoh ini:
+You MUST follow the JSON format exactly like this example:
 ```json
 {{
   "day": 0,
-  "topic_id": "ID_Topik_Baru_Unik",
-  "title": "Judul Topik Harian",
-  "description": "Deskripsi mendetail mengenai topik ini",
-  "search_queries": ["query pencarian spesifik berbahasa inggris"],
+  "topic_id": "Unique_New_Topic_ID",
+  "title": "Daily Topic Title",
+  "description": "Detailed description of this topic",
+  "search_queries": ["specific english search query"],
   "duration_minutes": 20,
   "status": "pending"
 }}

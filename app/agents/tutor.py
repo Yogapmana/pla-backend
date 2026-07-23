@@ -10,16 +10,16 @@ from app.utils.llm_factory import get_llm
 
 logger = logging.getLogger(__name__)
 
-TUTOR_SYSTEM_PROMPT = """Kamu adalah Tutor AI interaktif dan suportif yang bertugas membantu pengguna memahami materi pembelajaran.
-Gunakan konteks (modul) yang disediakan sebagai dasar utama atau titik awal, namun kamu SANGAT DIANJURKAN untuk:
-1. Memberikan penjelasan yang lebih mendalam, contoh dunia nyata, dan analogi yang mudah dipahami.
-2. Mengembangkan jawaban dengan pengetahuan umummu jika itu dapat membantu pengguna memahami konsep secara lebih baik.
-3. Bersikap membimbing, bukan hanya membacakan teks. Jelaskan 'mengapa' dan 'bagaimana' di balik suatu konsep.
-4. Menjawab dalam bahasa: {language}.
+TUTOR_SYSTEM_PROMPT = """You are an interactive and supportive AI Tutor assigned to help users understand their learning materials.
+Use the provided context (module) as your primary basis or starting point, but you are HIGHLY ENCOURAGED to:
+1. Provide deeper explanations, real-world examples, and easy-to-understand analogies.
+2. Expand the answer with your general knowledge if it helps the user understand the concept better.
+3. Act as a guide, not just reading the text. Explain the 'why' and 'how' behind a concept.
+4. Answer in the language: {language}.
 
-PENTING: JIKA PENGGUNA BERTANYA TENTANG TOPIK YANG SAMA SEKALI TIDAK BERHUBUNGAN DENGAN MATERI MODUL, TOLAK DENGAN SOPAN DAN ARAHKAN MEREKA KEMBALI KE TOPIK PEMBELAJARAN (Contoh: "Maaf, pertanyaan tersebut di luar topik modul ini. Mari kita kembali fokus belajar tentang [Topik Modul]").
+IMPORTANT: IF THE USER ASKS ABOUT A TOPIC THAT IS COMPLETELY UNRELATED TO THE MODULE MATERIAL, POLITELY REFUSE AND REDIRECT THEM BACK TO THE LEARNING TOPIC (Example: "Sorry, that question is outside the scope of this module. Let's get back to focusing on [Module Topic]").
 
-Jika kamu menggunakan informasi spesifik dari konteks, kamu bisa menyertakan referensinya. Namun pastikan gaya bahasamu tetap natural dan mengalir layaknya guru profesional."""
+If you use specific information from the context, you can include the references. However, make sure your tone remains natural and flows like a professional teacher."""
 
 
 def _build_context_block(chunks: list[dict]) -> str:
@@ -168,42 +168,43 @@ async def tutor_generate_quiz(
         
     context = _build_context_block(chunks)
 
-    prompt = f"""Berdasarkan materi berikut, buat {num_questions} soal pilihan ganda (MCQ) secara ACAK.
-TULIS KESELURUHAN SOAL DAN JAWABAN DALAM BAHASA: {language}.
+    prompt = f"""Based on the following material, generate {num_questions} Multiple Choice Questions (MCQ) RANDOMLY.
+WRITE ALL QUESTIONS AND ANSWERS IN THE LANGUAGE: {language}.
 
-TINGKAT KESULITAN SOAL: {difficulty}
-(Panduan Kesulitan:
-- Mudah: Pertanyaan berfokus pada pengenalan konsep dan studi kasus sederhana yang aplikatif. Jangan hanya menanyakan definisi murni.
-- Menengah: Mengharuskan pengguna menganalisis hubungan antar konsep dan memecahkan skenario tingkat menengah.
-- Sulit: Fokus pada penyelesaian masalah kompleks, analisis mendalam, atau jebakan logika (trick questions) berdasarkan materi.)
-PENTING UNTUK VARIASI DAN KREATIVITAS SOAL: 
-- Acak konsep yang kamu pilih dari materi secara ekstrim (jangan hanya fokus pada awal materi).
-- Buat soal dari sudut pandang yang berbeda, misalnya studi kasus penerapan, skenario error, atau perbandingan konsep.
-- Pastikan opsi jawaban pengecoh (distractor) sangat masuk akal, tidak terlalu mudah ditebak, dan memancing pemahaman mendalam.
-- JANGAN mengulang pola pertanyaan yang sama. Buat setiap soal terasa unik dan menguji aspek berbeda dari materi.
+QUESTION DIFFICULTY LEVEL: {difficulty}
+(Difficulty Guidelines:
+- Easy: Questions focus on concept recognition and simple applicable case studies. Do not just ask for pure definitions.
+- Medium: Requires users to analyze relationships between concepts and solve intermediate-level scenarios.
+- Hard: Focus on complex problem-solving, in-depth analysis, or logic traps (trick questions) based on the material.)
 
-MATERI:
+IMPORTANT FOR QUESTION VARIETY AND CREATIVITY:
+- Randomize the concepts you pick from the material extremely (do not just focus on the beginning of the material).
+- Create questions from different perspectives, such as application case studies, error scenarios, or concept comparisons.
+- Ensure the distractor options are highly plausible, not too easy to guess, and provoke deep understanding.
+- DO NOT repeat the same question patterns. Make each question feel unique and test different aspects of the material.
+
+MATERIAL:
 {context}
 
-RATIO SOAL: 100% MCQ
-- MCQ: 4 opsi (A, B, C, D)
+QUESTION RATIO: 100% MCQ
+- MCQ: 4 options (A, B, C, D)
 
-FORMAT OUTPUT (JSON array):
+OUTPUT FORMAT (JSON array):
 [
   {{
-    "question": "Pertanyaan?",
+    "question": "Question text?",
     "question_type": "mcq",
     "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
     "correct_answer": "A. ...",
-    "explanation": "Penjelasan singkat mengapa jawaban ini benar."
+    "explanation": "Brief explanation of why this answer is correct."
   }}
 ]
 
-PENTING:
-- correct_answer untuk MCQ harus berupa TEKS LENGKAP dari opsi yang benar
-- question_type wajib diisi: "mcq"
+IMPORTANT:
+- correct_answer for MCQ must be the FULL TEXT of the correct option
+- question_type must be: "mcq"
 
-Hanya output JSON array, tanpa teks tambahan."""
+Output only the JSON array, no additional text."""
 
     import json
     import re
@@ -249,9 +250,11 @@ Hanya output JSON array, tanpa teks tambahan."""
         topic_title,
     )
     strict_prompt = (
-        f"Buat tepat {num_questions} soal pilihan ganda dalam format JSON array.\n"
-        "JANGAN tambahkan teks apapun di luar array. Output HARUS dimulai dengan "
-        f"'[' dan diakhiri dengan ']'.\\n\\nMATERI:\\n{context}"
+        f"Create exactly {num_questions} multiple choice questions in JSON array format.\n"
+        "DO NOT add any text outside the array. The output MUST start with '[' and end with ']'.\n"
+        "EACH question MUST have these keys exactly: 'question', 'question_type' (must be 'mcq'), "
+        "'options' (array of 4 strings), 'correct_answer' (must match one of the options exactly), and 'explanation'.\n\n"
+        f"MATERIAL:\n{context}"
     )
     response = llm.invoke(strict_prompt)
     response_text = response.content.strip()  # type: ignore[attr-defined]

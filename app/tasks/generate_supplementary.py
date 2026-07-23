@@ -104,7 +104,9 @@ def generate_supplementary_module(self, session_id: str, user_id: str, topic_id:
             state["agent_logs"].append(log)
             
             all_raw_content = []
-            query_tasks = [run_tools_for_query(q, topic_id) for q in queries]
+            query_tasks = [
+                run_tools_for_query(q, topic_id, config.language) for q in queries
+            ]
             query_results = await asyncio.gather(*query_tasks)
             
             for results in query_results:
@@ -148,6 +150,20 @@ def generate_supplementary_module(self, session_id: str, user_id: str, topic_id:
                 "message": f"Materi {title_prefix} untuk '{topic_title}' berhasil digenerate.",
                 "metadata": {"module_id": str(existing_id), "type": supplementary_type},
             })
+
+            # Create notification
+            from app.services.notification_service import NotificationService
+            notif_service = NotificationService(db)
+            title = "Materi Remedial Tersedia" if supplementary_type == "remedial" else "Materi Deep Dive Tersedia"
+            message = f"Materi {title_prefix} untuk topik '{topic_title}' sudah siap Anda pelajari."
+            link_path = f"/module/{topic_id}/remedial" if supplementary_type == "remedial" else f"/module/{topic_id}/deep-dive"
+            await notif_service.create_notification(
+                user_id=user_id,
+                title=title,
+                message=message,
+                notification_type=f"{supplementary_type}_ready",
+                link=link_path
+            )
 
             return {
                 "status": "success",

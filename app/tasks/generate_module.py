@@ -107,7 +107,9 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
             state["agent_logs"].append(log)
             
             all_raw_content = []
-            query_tasks = [run_tools_for_query(q, topic_id) for q in queries]
+            query_tasks = [
+                run_tools_for_query(q, topic_id, config.language) for q in queries
+            ]
             query_results = await asyncio.gather(*query_tasks)
             
             for results in query_results:
@@ -158,6 +160,8 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
             await db.commit()
             await db.refresh(module_rec)
             
+            module_id_str = str(module_rec.id)
+            
             # Publish a final success log so WebSocket clients see completion
             await publish_log(session_id, {
                 "type": "agent_log",
@@ -165,7 +169,7 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
                 "agent": "composer",
                 "level": "info",
                 "message": f"Module '{generated_module.title}' ready for topic {topic_id}.",
-                "metadata": {"module_id": str(module_rec.id)},
+                "metadata": {"module_id": module_id_str},
             })
 
             # NEW (NotebookLM-style mindmap): when the FIRST module
@@ -215,9 +219,20 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
                         "mindmap task: %s", _trigger_exc,
                     )
 
+            if total_modules > 1:
+                from app.services.notification_service import NotificationService
+                notif_service = NotificationService(db)
+                await notif_service.create_notification(
+                    user_id=user_id,
+                    title="Materi Topik Selanjutnya Siap",
+                    message=f"Modul '{generated_module.title}' sudah siap untuk Anda pelajari.",
+                    notification_type="next_module_ready",
+                    link=f"/module/{topic_id}"
+                )
+
             return {
                 "status": "success",
-                "module_id": str(module_rec.id),
+                "module_id": module_id_str,
                 "topic_id": topic_id,
                 "title": generated_module.title,
             }

@@ -70,9 +70,9 @@ class MockDB:
                             return MockSessionRow(self.session_id)
                         if "topics" in stmt_str:
                             return MockTopicRow(self.session_id, self.topic_id)
-                        # Everything else (curriculum, progress signals) -> None
-                        # so evaluate_feedback skips replanning and runs with
-                        # default mastery (0.5 -> "repeat").
+                        # Everything else (progress signals) -> None so
+                        # evaluate_feedback runs with default mastery
+                        # (0.5 -> "remedial" in current feedback_engine).
                         return None
 
                 return MockScalars()
@@ -151,11 +151,12 @@ async def test_evaluate_progress_signals():
                 "topic_id": "topic_test_2"
             })
 
-            # When no signals in DB, mastery defaults to 0.5 -> "repeat"
+            # When no signals in DB, mastery defaults to 0.5 -> "remedial"
             assert response.status_code == 200, response.text
             data = response.json()
-            assert data["feedback_action"] == "repeat"
+            assert data["feedback_action"] == "remedial"
             assert data["mastery_score"] == 0.5
+            assert data["message"] == "Mastery evaluated."
     finally:
         _restore_db(saved_factory)
 

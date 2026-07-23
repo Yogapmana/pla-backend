@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import auth, chat, quiz, progress, learning, gamification
 from app.api.v1.websocket import router as ws_router
-from app.api.v1 import curriculum, modules
+from app.api.v1 import curriculum, modules, notifications
 
 from contextlib import asynccontextmanager
 from redis import asyncio as aioredis
@@ -60,6 +60,9 @@ app.include_router(
     prefix="/api/v1/gamification",
     tags=["gamification"],
 )
+
+# Notifications endpoint
+app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["notifications"])
 
 
 # WebSocket endpoint for real-time agent log streaming

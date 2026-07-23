@@ -129,36 +129,36 @@ class EnhancedMindmap(BaseModel):
 # v1 prompt (unchanged — kept for backward compat)
 # ════════════════════════════════════════════════════════════════════════
 
-CONCEPT_EXTRACTION_PROMPT = """Anda adalah asisten AI untuk membuat PETA KONSEP dari sebuah kurikulum pembelajaran.
+CONCEPT_EXTRACTION_PROMPT = """You are an AI assistant for creating CONCEPT MAPS from a learning curriculum.
 
-Tugas: Dari daftar seluruh topik di bawah ini untuk kursus "{course_title}",
-1. Ekstrak 5-15 **Konsep Utama** yang mewakili ide-ide kunci dari keseluruhan kursus ini.
-2. Bedah / pecah setiap topik menjadi 2-3 **Sub-Topik** (Poin Kunci Pembelajaran) agar lebih mudah dipahami.
+Task: From the entire list of topics below for the course "{course_title}",
+1. Extract 5-15 **Main Concepts** that represent the key ideas of the entire course.
+2. Break down / dissect each topic into 2-3 **Sub-Topics** (Key Learning Points) to make it easier to understand.
 
-# Aturan KETAT
-1. Output HARUS berupa JSON valid persis seperti format di bawah ini.
-2. Setiap topik WAJIB muncul di `topic_ids` dari minimal 1 konsep.
-3. Setiap topik WAJIB memiliki entri di `enriched_topics` dengan 2-3 `sub_topics`.
-4. Nama konsep dan sub-topik harus singkat: 1-4 kata, bahasa {language}. Capitalize each word.
-5. JANGAN duplikasi konsep.
+# STRICT Rules
+1. The output MUST be valid JSON exactly like the format below.
+2. Every topic MUST appear in the `topic_ids` of at least 1 concept.
+3. Every topic MUST have an entry in `enriched_topics` with 2-3 `sub_topics`.
+4. The names of concepts and sub-topics must be short: 1-4 words, in language {language}. Capitalize each word.
+5. DO NOT duplicate concepts.
 
-Anda WAJIB mengembalikan JSON dengan struktur KUNCI (KEYS) berikut:
+You MUST return a JSON with the following KEYS structure:
 ```json
 {{
   "concepts": [
     {{
-      "label": "Nama Konsep",
-      "description": "Deskripsi singkat konsep",
-      "topic_ids": ["ID_TOPIK_1", "ID_TOPIK_2"]
+      "label": "Concept Name",
+      "description": "Short description of the concept",
+      "topic_ids": ["TOPIC_ID_1", "TOPIC_ID_2"]
     }}
   ],
   "enriched_topics": [
     {{
-      "topic_id": "ID_TOPIK_1",
+      "topic_id": "TOPIC_ID_1",
       "sub_topics": [
         {{
-          "label": "Nama Sub Topik",
-          "description": "Deskripsi singkat sub topik"
+          "label": "Sub Topic Name",
+          "description": "Short description of the sub topic"
         }}
       ]
     }}
@@ -166,11 +166,11 @@ Anda WAJIB mengembalikan JSON dengan struktur KUNCI (KEYS) berikut:
 }}
 ```
 
-# Informasi Kursus
-- Kursus: {course_title}
-- Bahasa output: {language}
+# Course Information
+- Course: {course_title}
+- Output Language: {language}
 
-# Daftar Topik Seluruh Kurikulum (JSON)
+# Complete Curriculum Topics List (JSON)
 {topics_json}
 """
 
@@ -199,16 +199,16 @@ Return valid JSON with this structure:
   "themes": [
     {{
       "label": "Theme Name (2-4 words)",
-      "description": "1 sentence",
+      "description": "1 short sentence",
       "color": "blue|green|amber|purple|red|teal",
       "concepts": [
         {{
           "label": "Concept Name (3-6 words, complete phrase)",
-          "description": "1-2 sentences — WHAT and WHY it matters",
+          "description": "1 short sentence (max 10 words)",
           "key_points": [
             {{
               "label": "Key point (2-5 words)",
-              "description": "1-2 educational sentences"
+              "description": "Very short phrase (3-8 words) or a few keywords"
             }}
           ],
           "topic_ids": ["topic_id_1", "topic_id_2"]
@@ -221,29 +221,27 @@ Return valid JSON with this structure:
 
 # STRICT RULES (MUST FOLLOW)
 
-## 1. STRUCTURE — FLEXIBLE, FOLLOW THE MATERIAL
+## 1. STRUCTURE — EXPAND FREELY, DO NOT LIMIT TO 2 NODES
 - Number of themes, concepts, and key points should FOLLOW the material naturally.
-- DO NOT force a fixed number. If a theme has 2 concepts, that's fine. If it has 7, that's also fine.
-- Let the CONTENT drive the structure, not an arbitrary count.
+- DO NOT artificially limit the number of `key_points` to just 1 or 2. Generate around 3-5 key points per concept if the material is rich. 
 - A simple theme can have fewer branches. A complex theme can have more.
 
 ## 2. LABELS (very important)
-- **NOT keywords** (e.g. "useState") — that's clear but not educational.
 - **COMPLETE PHRASES** (e.g. "How useState Hook Works") that explain the idea.
 - Each label must be readable on its own without extra context.
 - 2-6 words.
 
-## 3. LANGUAGE — CRITICAL
-- ALL text output (course_title, summary, labels, descriptions) MUST be in **{language}**.
-- If language is "id", write in Indonesian. If "en", write in English. Etc.
+## 3. LANGUAGE — EXTREMELY CRITICAL
+- ALL text output (course_title, summary, labels, descriptions) MUST strictly be translated and written in **{language}**.
+- If the requested language is English, do NOT output Indonesian. If the requested language is Indonesian, do NOT output English.
 - Do NOT mix languages.
 
 ## 4. NO ICONS/EMOJI
 - Do NOT include any emoji or icon characters in labels or descriptions.
 - Keep text clean and plain.
 
-## 5. DESCRIPTIONS (MANDATORY & educational)
-- Every node has a `description`. Not just a summary — it must TEACH.
+## 5. DESCRIPTIONS (MANDATORY BUT SHORT)
+- Every node has a `description`. Because this is a mindmap, descriptions MUST be very short and punchy. Do not write long paragraphs.
 - Use information FROM THE SOURCES below, do NOT make things up.
 
 ## 6. SOURCE USAGE

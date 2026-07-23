@@ -32,10 +32,10 @@ def calculate_mastery(signals: ProgressSignals) -> float:
 
     # Formula sesuai PRD
     score = (
-        quiz_score * 0.40 +
-        reading_time_ratio * 0.20 +
-        question_freq * 0.20 +
-        self_assess * 0.15 +
+        quiz_score * 0.60 +
+        reading_time_ratio * 0.15 +
+        question_freq * 0.10 +
+        self_assess * 0.10 +
         material_rating * 0.05
     )
     

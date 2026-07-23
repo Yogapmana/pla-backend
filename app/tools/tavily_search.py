@@ -5,7 +5,7 @@ from app.config import settings
 tavily_client = TavilyClient(api_key=settings.TAVILY_API_KEY)
 
 @tool
-def tavily_search_tool(query: str, max_results: int = 5) -> list[dict]:
+def tavily_search_tool(query: str, max_results: int = 5, language: str = "id") -> list[dict]:
     """Search the web for information using Tavily API. 
     Useful for finding up-to-date information, articles, and general knowledge.
     Returns a list of search results with 'title', 'url', and 'content'."""
