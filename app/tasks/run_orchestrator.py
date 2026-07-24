@@ -222,7 +222,7 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
                 curriculum,
                 final_state.get("concept_graph"),
             )
-            await save_modules_and_links(
+            topic_module_map = await save_modules_and_links(
                 db,
                 session_id,
                 modules,
@@ -232,6 +232,20 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
             await db.commit()
 
         await engine.dispose()
+
+        # Run embedding indexer for each module
+        from app.rag.indexer import index_module
+        for module in modules:
+            module_id = str(topic_module_map.get(module.topic_id, ""))
+            await asyncio.to_thread(
+                index_module,
+                user_id=user_id,
+                session_id=session_id,
+                topic_id=module.topic_id,
+                module_id=module_id,
+                title=module.title,
+                content_markdown=module.content_markdown,
+            )
 
         if curriculum is not None and modules:
             await _queue_enhanced_mindmap(session_id)
@@ -261,17 +275,39 @@ def resume_learning_pipeline(self, session_id: str):
         final_state = await _stream_graph(session_id, None)
         modules = final_state.get("modules", [])
 
+        from app.models.learning import LearningSession
+        from sqlalchemy import select
         async with AsyncSession(engine) as db:
-            await save_modules_and_links(
+            topic_module_map = await save_modules_and_links(
                 db,
                 session_id,
                 modules,
                 final_state.get("research_results", []),
             )
             await mark_session_status(db, session_id, ready=True)
+            result = await db.execute(
+                select(LearningSession).where(LearningSession.id == uuid.UUID(session_id))
+            )
+            session = result.scalars().first()
+            user_id = str(session.user_id) if session else ""
             await db.commit()
 
         await engine.dispose()
+
+        # Run embedding indexer for each module
+        from app.rag.indexer import index_module
+        for module in modules:
+            module_id = str(topic_module_map.get(module.topic_id, ""))
+            await asyncio.to_thread(
+                index_module,
+                user_id=user_id,
+                session_id=session_id,
+                topic_id=module.topic_id,
+                module_id=module_id,
+                title=module.title,
+                content_markdown=module.content_markdown,
+            )
+
         return {
             "session_id": session_id,
             "modules_count": len(modules),

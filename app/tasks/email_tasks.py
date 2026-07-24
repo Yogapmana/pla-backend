@@ -61,7 +61,6 @@ def send_daily_reminder_email_task(email: str, username: str):
 @celery_app.task(name="app.tasks.check_daily_reminders_task")
 def check_daily_reminders_task():
     """Celery beat task to check users and send reminders"""
-    # Run the async function synchronously using asyncio
-    loop = asyncio.get_event_loop()
-    count = loop.run_until_complete(_check_and_send_daily_reminders())
+    # Run the async function synchronously using asyncio.run
+    count = asyncio.run(_check_and_send_daily_reminders())
     return f"Checked and sent daily reminders to {count} users"

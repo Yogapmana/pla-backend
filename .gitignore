@@ -53,6 +53,10 @@ logs/
 *.sqlite
 *.sqlite3
 
+# Celery Beat schedule (runtime SQLite)
+celerybeat-schedule
+celerybeat-schedule-*
+
 # OS
 .DS_Store
 Thumbs.db

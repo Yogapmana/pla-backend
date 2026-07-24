@@ -168,7 +168,7 @@ async def tutor_generate_quiz(
         
     context = _build_context_block(chunks)
 
-    prompt = f"""Based on the following material, generate {num_questions} Multiple Choice Questions (MCQ) RANDOMLY.
+    prompt = f"""Based on the following material about the topic '{topic_title}', generate {num_questions} Multiple Choice Questions (MCQ) RANDOMLY.
 WRITE ALL QUESTIONS AND ANSWERS IN THE LANGUAGE: {language}.
 
 QUESTION DIFFICULTY LEVEL: {difficulty}
