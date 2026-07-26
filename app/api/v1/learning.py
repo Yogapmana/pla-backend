@@ -121,20 +121,41 @@ async def start_learning_session(
             detail="Batas maksimal sesi belajar tercapai (maksimal 3). Selesaikan atau hapus sesi yang ada terlebih dahulu."
         )
 
-    # Process uploaded files (extract text from PDFs)
+    import io
+    import docx
+
+    # Process uploaded files (validate and extract text)
+    if len(files) > 3:
+        raise HTTPException(status_code=400, detail="Maksimal 3 file yang diizinkan.")
+
     context_text = ""
+    MAX_SIZE = 10 * 1024 * 1024
+
     for file in files:
-        if file.filename and file.filename.endswith(".pdf"):
-            try:
-                # Read file content into memory
-                content = await file.read()
-                # Open PDF with PyMuPDF
+        if not file.filename:
+            continue
+            
+        try:
+            content = await file.read()
+            if len(content) > MAX_SIZE:
+                raise HTTPException(status_code=400, detail=f"File {file.filename} melebihi batas 10MB.")
+
+            filename_lower = file.filename.lower()
+            if filename_lower.endswith(".pdf"):
                 doc = fitz.open(stream=content, filetype="pdf")
                 for page in doc:
                     context_text += page.get_text() + "\n\n"
                 doc.close()
-            except Exception as e:
-                logger.error(f"Error parsing PDF {file.filename}: {e}")
+            elif filename_lower.endswith(".docx"):
+                doc = docx.Document(io.BytesIO(content))
+                for para in doc.paragraphs:
+                    context_text += para.text + "\n"
+            elif filename_lower.endswith(".txt"):
+                context_text += content.decode("utf-8") + "\n\n"
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error parsing file {file.filename}: {e}")
 
     # Limit context_text to avoid hitting payload too large errors
     if len(context_text) > 15000:

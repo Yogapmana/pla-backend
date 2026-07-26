@@ -74,9 +74,9 @@ def planner_node(state: SynapsaState) -> SynapsaState:
     state["agent_logs"].append(log)
 
     # Initialize LLM with structured output and large token limit for long curriculums
-    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, max_tokens=4000)
-    from langchain_groq import ChatGroq
-    if isinstance(llm, ChatGroq):
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2)
+    from app.utils.llm_factory import uses_json_mode
+    if uses_json_mode(llm):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
     else:
         structured_llm = llm.with_structured_output(Curriculum)
@@ -223,9 +223,9 @@ def replan_node(state: SynapsaState) -> SynapsaState:
         return state
 
     llm = get_llm(settings.PLANNER_MODEL, temperature=0.3)
-    from langchain_groq import ChatGroq
+    from app.utils.llm_factory import uses_json_mode
     from app.agents.state import DaySchedule
-    if isinstance(llm, ChatGroq):
+    if uses_json_mode(llm):
         structured_llm = llm.with_structured_output(DaySchedule, method="json_mode")
     else:
         structured_llm = llm.with_structured_output(DaySchedule)

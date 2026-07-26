@@ -159,12 +159,13 @@ async def tutor_generate_quiz(
         user_id=user_id,
         query=f"materi pembelajaran {topic_title}",
         topic_id=topic_id,
-        top_k_retrieve=10,
-        top_k_rerank=5,
+        top_k_retrieve=20,
+        top_k_rerank=10,
         use_hyde=False,
     )
-    if len(chunks) > 3:
-        chunks = random.sample(chunks, 3)
+    # Shuffle chunks to maintain variety without reducing context size drastically
+    if chunks:
+        random.shuffle(chunks)
         
     context = _build_context_block(chunks)
 
@@ -182,6 +183,8 @@ IMPORTANT FOR QUESTION VARIETY AND CREATIVITY:
 - Create questions from different perspectives, such as application case studies, error scenarios, or concept comparisons.
 - Ensure the distractor options are highly plausible, not too easy to guess, and provoke deep understanding.
 - DO NOT repeat the same question patterns. Make each question feel unique and test different aspects of the material.
+- CRITICAL: Ensure all 4 options (A, B, C, D) are approximately the SAME LENGTH. The correct answer must NOT be obviously longer or more detailed than the distractors.
+- CRITICAL: You MUST randomly distribute the position of the correct answer among options A, B, C, and D across the questions. DO NOT always make 'A' the correct answer.
 
 MATERIAL:
 {context}
@@ -194,8 +197,8 @@ OUTPUT FORMAT (JSON array):
   {{
     "question": "Question text?",
     "question_type": "mcq",
-    "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
-    "correct_answer": "A. ...",
+    "options": ["A. [Text]", "B. [Text]", "C. [Text]", "D. [Text]"],
+    "correct_answer": "C. [Text]",
     "explanation": "Brief explanation of why this answer is correct."
   }}
 ]
@@ -253,7 +256,8 @@ Output only the JSON array, no additional text."""
         f"Create exactly {num_questions} multiple choice questions in JSON array format.\n"
         "DO NOT add any text outside the array. The output MUST start with '[' and end with ']'.\n"
         "EACH question MUST have these keys exactly: 'question', 'question_type' (must be 'mcq'), "
-        "'options' (array of 4 strings), 'correct_answer' (must match one of the options exactly), and 'explanation'.\n\n"
+        "'options' (array of 4 strings), 'correct_answer' (must match one of the options exactly), and 'explanation'.\n"
+        "CRITICAL: You MUST randomly distribute the position of the correct_answer among options A, B, C, and D. Do not always make A the correct answer.\n\n"
         f"MATERIAL:\n{context}"
     )
     response = llm.invoke(strict_prompt)

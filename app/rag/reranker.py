@@ -2,6 +2,8 @@ import logging
 from typing import Any
 from flashrank import Ranker, RerankRequest
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 _ranker: Ranker | None = None
@@ -10,7 +12,7 @@ _ranker: Ranker | None = None
 def get_ranker() -> Ranker:
     global _ranker
     if _ranker is None:
-        _ranker = Ranker()
+        _ranker = Ranker(model_name=settings.RERANKER_MODEL)
     return _ranker
 
 

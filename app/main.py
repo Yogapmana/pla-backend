@@ -1,10 +1,19 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import auth, chat, quiz, progress, learning, gamification
 from app.api.v1.websocket import router as ws_router
 from app.api.v1 import curriculum, modules, notifications
-
+from dotenv import load_dotenv
 from contextlib import asynccontextmanager
+
+load_dotenv()
+
+LANGSMITH_KEYS = ["LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"]
+for key in LANGSMITH_KEYS:
+    val = os.getenv(key)
+    if val:
+        os.environ[key] = val
 from redis import asyncio as aioredis
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.redis import RedisBackend

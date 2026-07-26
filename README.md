@@ -2,7 +2,6 @@
 
 A multi-agent RAG-based adaptive learning platform that operates as a "private tutoring team." Given a topic and duration, the system autonomously designs a personalized curriculum, gathers materials from the internet, synthesizes them into structured learning modules, and adapts the learning path in real-time based on multi-signal performance feedback.
 
-Built for undergraduate thesis (Skripsi S1).
 
 ---
 
@@ -117,7 +116,7 @@ DATABASE_URL=postgresql+asyncpg://pla_user:pla_password@localhost:5433/pla_db
 QDRANT_URL=http://localhost:6333
 REDIS_URL=redis://localhost:6380/0
 OLLAMA_BASE_URL=http://localhost:11434
-GROQ_API_KEY=your_groq_api_key
+  OPENROUTER_API_KEY=your_openrouter_api_key
 TAVILY_API_KEY=your_tavily_api_key
 JINA_API_KEY=your_jina_api_key
 SECRET_KEY=your_secret_key_here

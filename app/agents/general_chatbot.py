@@ -203,7 +203,7 @@ async def general_chatbot_chat(
         logger.error(f"[GeneralChatbot] Error during agent execution: {error_str}")
         
         if "400" in error_str and ("tool_use_failed" in error_str or "failed_generation" in error_str):
-            logger.info("[GeneralChatbot] Groq tool error detected. Falling back to direct LLM call without tools...")
+            logger.info("[GeneralChatbot] Tool-call error detected. Falling back to direct LLM call without tools...")
             try:
                 fallback_llm = get_llm(settings.GENERAL_CHAT_MODEL)
                 # Call LLM directly without binding tools

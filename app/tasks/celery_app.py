@@ -1,3 +1,14 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+LANGSMITH_KEYS = ["LANGSMITH_TRACING", "LANGSMITH_API_KEY", "LANGSMITH_PROJECT"]
+for key in LANGSMITH_KEYS:
+    val = os.getenv(key)
+    if val:
+        os.environ[key] = val
+
 from celery import Celery
 
 from app.config import settings

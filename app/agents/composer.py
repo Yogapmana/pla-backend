@@ -166,7 +166,7 @@ def composer_node(state: SynapsaState) -> SynapsaState:
     else:
         selected_prompt = COMPOSER_PROMPT
 
-    llm = get_llm(settings.COMPOSER_MODEL, temperature=0.3, max_tokens=2500)
+    llm = get_llm(settings.COMPOSER_MODEL, temperature=0.3)
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", selected_prompt),

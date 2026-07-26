@@ -314,9 +314,9 @@ async def mindmap_mapper_node(state: SynapsaState) -> dict:
             })
 
     model_used = settings.MINDMAP_MODEL
-    llm = get_llm(model_used, temperature=0.2, max_tokens=3000)
-    from langchain_groq import ChatGroq
-    if isinstance(llm, ChatGroq):
+    llm = get_llm(model_used, temperature=0.2)
+    from app.utils.llm_factory import uses_json_mode
+    if uses_json_mode(llm):
         structured_llm = llm.with_structured_output(
             CurriculumConceptsResult, method="json_mode"
         )
@@ -442,15 +442,15 @@ async def mindmap_v2_mapper(
         research_json=research_json,
     )
 
-    llm = get_llm(model_used, temperature=0.3, max_tokens=6000)
-    from langchain_groq import ChatGroq
+    llm = get_llm(model_used, temperature=0.3)
+    from app.utils.llm_factory import uses_json_mode
     from langchain_core.output_parsers import JsonOutputParser
 
-    is_groq = isinstance(llm, ChatGroq)
+    is_cloud = uses_json_mode(llm)
     structured_llm = None
     parser = None
-    
-    if is_groq:
+
+    if is_cloud:
         structured_llm = llm.with_structured_output(
             EnhancedMindmap, method="json_mode"
         )
@@ -474,7 +474,7 @@ async def mindmap_v2_mapper(
                 "Output ONLY the structured JSON, no commentary."
             )
             
-            if parser and not is_groq:
+            if parser and not is_cloud:
                 sys_msg += "\n\n" + parser.get_format_instructions()
                 
             messages = [
@@ -482,7 +482,7 @@ async def mindmap_v2_mapper(
                 HumanMessage(content=prompt),
             ]
             
-            if is_groq:
+            if is_cloud:
                 raw = await structured_llm.ainvoke(messages)
                 result = raw
             else:

@@ -251,8 +251,7 @@ class MindmapService:
         """Call the LLM and parse the structured output."""
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        # Groq models need a max_tokens cap to avoid LLMDidNotFinishException
-        llm = get_llm(model_name, temperature=0.2, max_tokens=2000)
+        llm = get_llm(model_name, temperature=0.2)
         structured_llm = llm.with_structured_output(MindmapLLMResult)
 
         prompt = MINDMAP_PROMPT_TEMSynapsaTE.format(

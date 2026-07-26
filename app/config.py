@@ -26,21 +26,32 @@ class Settings(BaseSettings):
 
     # LLM Providers
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434")
+    OPENROUTER_API_KEY: str = Field(default="")
+    OPENROUTER_BASE_URL: str = Field(default="https://openrouter.ai/api/v1")
+    # Legacy (ignored by llm_factory; kept so old .env still loads)
     GROQ_API_KEY: str = Field(default="")
     TAVILY_API_KEY: str = Field(default="")
     JINA_API_KEY: str = Field(default="")
     POLLINATIONS_API_KEY: str = Field(default="")
 
-    # Model Assignment
-    ORCHESTRATOR_MODEL: str = Field(default="llama-3.3-70b-versatile")
-    PLANNER_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    # Model Assignment — OpenRouter IDs (or Ollama name:tag for local)
+    ORCHESTRATOR_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
+    PLANNER_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
     RESEARCHER_MODEL: str = Field(default="gemma4:e4b")
-    COMPOSER_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    COMPOSER_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
     TUTOR_MODEL: str = Field(default="gemma4:e4b")
-    GENERAL_CHAT_MODEL: str = Field(default="llama-3.3-70b-versatile")
-    RAGAS_MODEL: str = Field(default="llama-3.1-8b-instant")
-    MINDMAP_MODEL: str = Field(default="llama-3.3-70b-versatile")
+    GENERAL_CHAT_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
+    RAGAS_MODEL: str = Field(default="meta-llama/llama-3.1-8b-instruct")
+    MINDMAP_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
     EMBEDDING_MODEL: str = Field(default="nomic-embed-text")
+
+    # LangSmith Tracing
+    LANGSMITH_TRACING: bool = Field(default=False)
+    LANGSMITH_API_KEY: str = Field(default="")
+    LANGSMITH_PROJECT: str = Field(default="synapsa-pla")
+
+    # Reranker (FlashRank model name)
+    RERANKER_MODEL: str = Field(default="ms-marco-MiniLM-L-12-v2")
 
     # Image Generation
     IMAGE_MODEL: str = Field(default="qwen-image")
