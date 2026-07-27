@@ -151,8 +151,9 @@ class RAGEvaluator:
             "didukung oleh KONTEKS? (1.0 = semua klaim ada di konteks; 0.0 = banyak halusinasi)\n"
             "2. ANSWER_RELEVANCY (0.0-1.0): Apakah JAWABAN relevan dengan "
             "PERTANYAAN USER? (1.0 = langsung menjawab; 0.0 = melenceng)\n\n"
-            "Format jawaban HANYA sebagai JSON valid, tanpa teks lain:\n"
-            '{"faithfulness": 0.85, "answer_relevancy": 0.92}'
+            "Evaluasi jawaban di atas dan berikan skor Anda.\n"
+            "Format jawaban HANYA sebagai JSON valid, tanpa teks lain. Contoh format:\n"
+            '{"faithfulness": <skor_anda>, "answer_relevancy": <skor_anda>}'
         )
         # Call LLM with explicit n=1 (Groq only allows n=1). Some
         # langchain providers support `n` via .bind(); we set the

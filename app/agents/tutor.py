@@ -122,6 +122,7 @@ async def tutor_chat(
     return {
         "response": response_text,
         "sources": sources,
+        "chunks": chunks,
         "latency_ms": latency_ms,
         "chunks_used": len(chunks),
         "timestamp": datetime.utcnow().isoformat(),

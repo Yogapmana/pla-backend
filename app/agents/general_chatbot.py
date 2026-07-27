@@ -224,11 +224,16 @@ async def general_chatbot_chat(
         f"[GeneralChatbot] Response generated in {latency_ms}ms using {tools_used} tool calls."
     )
 
-    # General chatbot doesn't strictly track chunks for Ragas in the same way Tutor does,
-    # as it might not use RAG at all. We pass an empty list of sources, relying on AI to mention them.
+    chunks = []
+    if "messages" in locals() and isinstance(locals().get("result"), dict):
+        for m in result.get("messages", []):
+            if m.type == "tool":
+                chunks.append({"text": m.content})
+
     return {
         "response": final_message,
         "sources": [],
+        "chunks": chunks,
         "latency_ms": latency_ms,
         "chunks_used": tools_used, # Hijacking this field to track tool calls
         "timestamp": datetime.utcnow().isoformat(),
