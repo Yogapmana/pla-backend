@@ -12,6 +12,8 @@ from app.services.quiz_cache import (
     store_quiz,
     get_quiz,
     consume_quiz,
+    try_acquire_generate_lock,
+    release_generate_lock,
     QUIZ_TTL_SECONDS,
     KEY_PREFIX,
 )
@@ -20,20 +22,34 @@ from app.services.quiz_cache import (
 def _make_fake_redis():
     """A tiny in-memory redis stub good enough for the cache contract."""
     store = {}
+    ttls = {}
 
     fake = MagicMock()
     fake.aclose = AsyncMock()
     fake.close = AsyncMock()
     fake.delete = AsyncMock(side_effect=lambda k: store.pop(k, None) is not None)
 
-    async def fake_set(key, value, ex=None):
+    async def fake_set(key, value, ex=None, nx=False):
+        if nx and key in store:
+            return False
         store[key] = value
+        if ex is not None:
+            ttls[key] = ex
+        return True
 
     async def fake_get(key):
         return store.get(key)
 
+    async def fake_expire(key, seconds):
+        if key not in store:
+            return False
+        ttls[key] = seconds
+        return True
+
     fake.set = AsyncMock(side_effect=fake_set)
     fake.get = AsyncMock(side_effect=fake_get)
+    fake.expire = AsyncMock(side_effect=fake_expire)
+    fake._ttls = ttls
 
     # Pipeline stub for atomic consume
     class FakePipeline:
@@ -110,6 +126,34 @@ async def test_get_quiz_returns_none_on_miss():
         result = await get_quiz("nobody", "nothing")
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_quiz_returns_same_active_quiz_for_reopen():
+    """Reopening a quiz must find existing questions and quiz_id."""
+    fake = _make_fake_redis()
+    questions = [{"question": "Q1", "correct_answer": "A"}]
+    with patch("app.services.quiz_cache.aioredis.from_url", return_value=fake):
+        quiz_id = await store_quiz("u1", "t1", questions, ttl_seconds=60)
+        reopened = await get_quiz("u1", "t1", refresh_ttl=True)
+
+    assert reopened["quiz_id"] == quiz_id
+    assert reopened["questions"] == questions
+    assert fake.expire.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_generate_lock_is_exclusive():
+    fake = _make_fake_redis()
+    with patch("app.services.quiz_cache.aioredis.from_url", return_value=fake):
+        first = await try_acquire_generate_lock("u1", "t1", ttl_seconds=30)
+        second = await try_acquire_generate_lock("u1", "t1", ttl_seconds=30)
+        await release_generate_lock("u1", "t1")
+        third = await try_acquire_generate_lock("u1", "t1", ttl_seconds=30)
+
+    assert first is True
+    assert second is False
+    assert third is True
 
 
 @pytest.mark.asyncio

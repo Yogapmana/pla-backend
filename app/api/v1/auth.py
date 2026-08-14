@@ -1,6 +1,6 @@
 import secrets
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -8,7 +8,18 @@ from pydantic import BaseModel, EmailStr
 from app.db.database import get_db
 from app.schemas.auth import UserCreate, UserResponse, Token, UserLanguageUpdate, UserProfileUpdate
 from app.models.user import User
-from app.services.auth_service import get_password_hash, verify_password, create_access_token
+from app.services.auth_service import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+    issue_token_pair,
+    set_auth_cookies,
+    clear_auth_cookies,
+    rotate_refresh_token,
+    revoke_refresh_token,
+    revoke_all_user_refresh_tokens,
+    REFRESH_COOKIE,
+)
 from app.services.streak_service import update_streak_on_login
 from app.dependencies import get_current_user
 from app.config import settings
@@ -72,12 +83,10 @@ async def register(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
         link="/dashboard"
     )
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": str(new_user.id)}, expires_delta=access_token_expires
-    )
+    # Register issues tokens only after email verification — return user without session cookies.
+    # Client must login after verify. Keep empty token for API compatibility.
     return {
-        "access_token": access_token,
+        "access_token": "",
         "token_type": "bearer",
         "user": new_user,
         "streak": None,
@@ -194,10 +203,15 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncSession = Depen
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(
+    response: Response,
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(User).where(User.email == form_data.username))
     user = result.scalars().first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -216,15 +230,14 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     # is_new_day, milestone) that the frontend uses to decide
     # whether to show a celebration modal.
     streak_data = await update_streak_on_login(db, user)
-    # Commit the streak update alongside the auth flow so they
-    # share the same transaction boundary.
+    access_token, refresh_token = await issue_token_pair(
+        db, user.id, user_agent=request.headers.get("user-agent")
+    )
+    # Commit the streak update + refresh token row together.
     await db.commit()
     await db.refresh(user)
 
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": str(user.id)}, expires_delta=access_token_expires
-    )
+    set_auth_cookies(response, access_token=access_token, refresh_token=refresh_token)
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -288,98 +301,147 @@ async def update_user_profile(
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user_account(
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Permanently delete the current user's account and related data."""
+    await revoke_all_user_refresh_tokens(db, current_user.id)
     await db.delete(current_user)
     await db.commit()
+    clear_auth_cookies(response)
     return None
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    """Refresh access token for authenticated user."""
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": str(current_user.id)}, expires_delta=access_token_expires
-    )
-    # No streak update on refresh — same reason as /me above.
-    return {"access_token": access_token, "token_type": "bearer", "user": current_user, "streak": None}
+async def refresh_token_endpoint(
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Rotate refresh token (httpOnly cookie) and issue a new access token.
 
-from pydantic import BaseModel
+    Does NOT require a valid access token — only the refresh cookie.
+    On reuse of a revoked refresh token, all sessions for that user are revoked.
+    """
+    raw_refresh = request.cookies.get(REFRESH_COOKIE)
+    if not raw_refresh:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing refresh token",
+        )
+    try:
+        access_token, new_refresh = await rotate_refresh_token(
+            db,
+            raw_refresh,
+            user_agent=request.headers.get("user-agent"),
+        )
+    except ValueError as e:
+        clear_auth_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e) or "Invalid refresh token",
+        ) from e
+
+    # Load user for response body
+    import jwt as pyjwt
+    from app.services.auth_service import decode_token
+
+    payload = decode_token(access_token, expected_type="access")
+    result = await db.execute(select(User).where(User.id == payload["sub"]))
+    user = result.scalars().first()
+    if user is None:
+        clear_auth_cookies(response)
+        raise HTTPException(status_code=401, detail="User not found")
+
+    await db.commit()
+    set_auth_cookies(response, access_token=access_token, refresh_token=new_refresh)
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user,
+        "streak": None,
+    }
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoke refresh token and clear auth cookies."""
+    raw_refresh = request.cookies.get(REFRESH_COOKIE)
+    await revoke_refresh_token(db, raw_refresh)
+    await db.commit()
+    clear_auth_cookies(response)
+    return None
+
+
 class GoogleAuthRequest(BaseModel):
     credential: str
 
+
 @router.post("/google", response_model=Token)
-async def google_auth(request: GoogleAuthRequest, db: AsyncSession = Depends(get_db)):
+async def google_auth(
+    body: GoogleAuthRequest,
+    response: Response,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """Authenticate user with Google id_token."""
     if not settings.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=500, detail="Google authentication is not configured.")
-        
+
     try:
-        # Verify the token with Google
         idinfo = id_token.verify_oauth2_token(
-            request.credential, 
-            requests.Request(), 
-            settings.GOOGLE_CLIENT_ID
+            body.credential,
+            requests.Request(),
+            settings.GOOGLE_CLIENT_ID,
         )
-        
+
         email = idinfo.get("email")
         name = idinfo.get("name", "User")
         google_id = idinfo.get("sub")
-        
+
         if not email:
             raise HTTPException(status_code=400, detail="Google token does not contain an email address.")
-            
+
     except ValueError as e:
         raise HTTPException(status_code=401, detail=f"Invalid Google token: {str(e)}")
-        
-    # Check if user already exists
+
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalars().first()
-    
+    streak_data = None
+
     if user:
-        # User exists. Check if they have a google_id, if not, link it.
         if not user.google_id:
             user.google_id = google_id
             if user.auth_provider == "local":
                 user.auth_provider = "google"
-            await db.commit()
-            await db.refresh(user)
-            
-        # Update streak on login
         streak_data = await update_streak_on_login(db, user)
-        await db.commit()
-        await db.refresh(user)
     else:
-        # User does not exist, register them
         user = User(
             email=email,
             username=name,
             hashed_password=None,
             auth_provider="google",
             google_id=google_id,
-            is_verified=True,  # Google OAuth users are auto-verified
+            is_verified=True,
         )
         db.add(user)
-        await db.commit()
-        await db.refresh(user)
-        
-        # Send welcome email asynchronously
+        await db.flush()
         send_welcome_email_task.delay(user.email, user.username)
-        
-        # Initialize streak on registration since it logs the user in immediately
         streak_data = await update_streak_on_login(db, user)
-        await db.commit()
-        await db.refresh(user)
-        
-    # Issue JWT token
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": str(user.id)}, expires_delta=access_token_expires
+
+    access_token, refresh_token = await issue_token_pair(
+        db, user.id, user_agent=request.headers.get("user-agent")
     )
-    
+    await db.commit()
+    await db.refresh(user)
+
+    set_auth_cookies(response, access_token=access_token, refresh_token=refresh_token)
     return {
         "access_token": access_token,
         "token_type": "bearer",

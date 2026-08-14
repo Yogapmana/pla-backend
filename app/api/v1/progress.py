@@ -51,6 +51,11 @@ async def get_user_metrics(
     session = await verify_session_owner(session_id, current_user, db)
     session_uuid = session.id
 
+    from app.services import metrics_cache
+    cached = await metrics_cache.get_user_metrics(str(session_uuid))
+    if cached is not None:
+        return UserMetricsResponse(**cached)
+
     topic_result = await db.execute(
         select(DBTopic).where(DBTopic.session_id == session_uuid)
     )
@@ -103,7 +108,7 @@ async def get_user_metrics(
         for offset in range(6, -1, -1)
     ]
 
-    return UserMetricsResponse(
+    response = UserMetricsResponse(
         session_id=session_id,
         topic_progress={
             "completed": completed_topics,
@@ -119,6 +124,8 @@ async def get_user_metrics(
         estimated_study_hours=estimated_study_hours,
         weekly_progress=weekly_progress,
     )
+    await metrics_cache.set_user_metrics(str(session_uuid), response.model_dump())
+    return response
 
 @router.post("/signal")
 async def submit_progress_signals(
@@ -166,6 +173,8 @@ async def submit_progress_signals(
         raise HTTPException(status_code=400, detail="No signals provided")
 
     await db.commit()
+    from app.services.metrics_cache import invalidate_session_metrics
+    await invalidate_session_metrics(str(session.id))
     return {"status": "success", "message": f"Saved signals: {', '.join(signals)}"}
 
 @router.post("/evaluate", response_model=EvaluateResponse)
@@ -270,6 +279,8 @@ async def evaluate_feedback(
     # Curriculum replan intentionally disabled — adaptive path is
     # remedial / deep-dive supplementary modules only (see quiz post-eval).
     await db.commit()
+    from app.services.metrics_cache import invalidate_session_metrics
+    await invalidate_session_metrics(str(session_uuid))
 
     return EvaluateResponse(
         mastery_score=mastery_score,
@@ -333,6 +344,11 @@ async def get_daily_study_time(
     session = await verify_session_owner(session_id, current_user, db)
     session_uuid = session.id
 
+    from app.services import metrics_cache
+    cached = await metrics_cache.get_daily_study_time(str(session_uuid), days)
+    if cached is not None:
+        return cached
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     # 1. Reading time from progress signals
@@ -377,6 +393,7 @@ async def get_daily_study_time(
             "total_minutes": round((reading_sec + quiz_sec) / 60, 1),
         })
 
+    await metrics_cache.set_daily_study_time(str(session_uuid), days, result)
     return result
 
 @router.get("/signals/{session_id}/{topic_id}")
@@ -391,7 +408,10 @@ async def get_topic_signals(
     Useful so the UI doesn't reset when the user reopens the module.
     """
     session = await verify_session_owner(session_id, current_user, db)
-    
+    await verify_topic_owner(
+        topic_id, current_user, db, require_session_id=session.id
+    )
+
     result = await db.execute(
         select(DBProgressSignal)
         .where(DBProgressSignal.session_id == session.id)
@@ -407,3 +427,203 @@ async def get_topic_signals(
         latest_signals[sig.signal_type] = sig.value
         
     return latest_signals
+
+
+@router.get("/{session_id}/recent-activity")
+async def get_recent_activity(
+    session_id: str,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Unified recent activity feed for the dashboard.
+
+    Merges (newest first, capped by ``limit``):
+      - quiz attempts
+      - topic completions
+      - reading sessions (reading_time_seconds signals, min 30s)
+      - self-assessment / material rating
+      - user chat messages (tutor + general)
+    """
+    from app.models.agent import ChatMessage as DBChatMessage
+
+    session = await verify_session_owner(session_id, current_user, db)
+    session_uuid = session.id
+    limit = max(1, min(limit, 50))
+    # Fetch extra per source so merge still has enough after filtering
+    per_source = max(limit, 15)
+
+    # Topic titles for enrichment
+    topics_result = await db.execute(
+        select(DBTopic).where(DBTopic.session_id == session_uuid)
+    )
+    topics = {t.id: t for t in topics_result.scalars().all()}
+
+    events: list[dict] = []
+
+    # 1. Quiz attempts
+    quiz_rows = (
+        await db.execute(
+            select(DBQuizResult)
+            .where(DBQuizResult.session_id == session_uuid)
+            .order_by(DBQuizResult.created_at.desc())
+            .limit(per_source)
+        )
+    ).scalars().all()
+    for q in quiz_rows:
+        if not q.created_at:
+            continue
+        title = topics.get(q.topic_id).title if q.topic_id and q.topic_id in topics else (q.topic_id or "Topik")
+        score_pct = round(float(q.score) * 100, 1) if q.score is not None and q.score <= 1 else (
+            round(float(q.score), 1) if q.score is not None else None
+        )
+        mins = round((q.time_spent_seconds or 0) / 60)
+        events.append({
+            "id": f"quiz-{q.id}",
+            "type": "quiz",
+            "title": f"Kuis: {title}",
+            "description": (
+                f"Skor: {int(score_pct) if score_pct is not None else '—'} — {mins} menit"
+                if score_pct is not None
+                else f"{mins} menit"
+            ),
+            "created_at": q.created_at.isoformat(),
+            "score": score_pct,
+            "topic_id": q.topic_id,
+            "href": f"/progress/topic/{q.topic_id}" if q.topic_id else None,
+        })
+
+    # 2. Topic completions
+    for t in topics.values():
+        if t.status != "completed" or not t.completed_at:
+            continue
+        mastery = (
+            round(float(t.mastery_score) * 100)
+            if t.mastery_score is not None
+            else None
+        )
+        events.append({
+            "id": f"topic-{t.id}",
+            "type": "topic",
+            "title": f"Selesai: {t.title}",
+            "description": (
+                f"Mastery {mastery}%" if mastery is not None else "Topik diselesaikan"
+            ),
+            "created_at": t.completed_at.isoformat(),
+            "score": mastery,
+            "topic_id": t.id,
+            "href": f"/module/{t.id}",
+        })
+
+    # 3. Reading signals (≥ 30 detik, agar tidak noise)
+    reading_rows = (
+        await db.execute(
+            select(DBProgressSignal)
+            .where(DBProgressSignal.session_id == session_uuid)
+            .where(DBProgressSignal.signal_type == "reading_time_seconds")
+            .where(DBProgressSignal.value >= 30)
+            .order_by(DBProgressSignal.created_at.desc())
+            .limit(per_source)
+        )
+    ).scalars().all()
+    for sig in reading_rows:
+        if not sig.created_at:
+            continue
+        title = (
+            topics.get(sig.topic_id).title
+            if sig.topic_id and sig.topic_id in topics
+            else "Modul"
+        )
+        mins = max(1, round(float(sig.value) / 60))
+        events.append({
+            "id": f"read-{sig.id}",
+            "type": "reading",
+            "title": f"Membaca: {title}",
+            "description": f"{mins} menit membaca",
+            "created_at": sig.created_at.isoformat(),
+            "score": None,
+            "topic_id": sig.topic_id,
+            "href": f"/module/{sig.topic_id}" if sig.topic_id else None,
+        })
+
+    # 4. Self-assessment & material rating
+    feedback_rows = (
+        await db.execute(
+            select(DBProgressSignal)
+            .where(DBProgressSignal.session_id == session_uuid)
+            .where(
+                DBProgressSignal.signal_type.in_(
+                    ["self_assessment", "material_rating"]
+                )
+            )
+            .order_by(DBProgressSignal.created_at.desc())
+            .limit(per_source)
+        )
+    ).scalars().all()
+    for sig in feedback_rows:
+        if not sig.created_at:
+            continue
+        title = (
+            topics.get(sig.topic_id).title
+            if sig.topic_id and sig.topic_id in topics
+            else "Topik"
+        )
+        val = float(sig.value)
+        # Values may be 0-1 or 1-5
+        if val <= 1:
+            display = f"{round(val * 100)}%"
+            score_out = round(val * 100)
+        else:
+            display = f"{val:g}/5"
+            score_out = round((val / 5) * 100)
+        label = (
+            "Penilaian diri"
+            if sig.signal_type == "self_assessment"
+            else "Rating materi"
+        )
+        events.append({
+            "id": f"sig-{sig.id}",
+            "type": "assessment",
+            "title": f"{label}: {title}",
+            "description": display,
+            "created_at": sig.created_at.isoformat(),
+            "score": score_out,
+            "topic_id": sig.topic_id,
+            "href": f"/module/{sig.topic_id}" if sig.topic_id else None,
+        })
+
+    # 5. User chat messages (skip empty / system noise)
+    chat_rows = (
+        await db.execute(
+            select(DBChatMessage)
+            .where(DBChatMessage.session_id == session_uuid)
+            .where(DBChatMessage.role == "user")
+            .order_by(DBChatMessage.created_at.desc())
+            .limit(per_source)
+        )
+    ).scalars().all()
+    for msg in chat_rows:
+        if not msg.created_at or not (msg.content or "").strip():
+            continue
+        snippet = (msg.content or "").strip().replace("\n", " ")
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "…"
+        topic_label = (
+            topics.get(msg.topic_id).title
+            if msg.topic_id and msg.topic_id in topics
+            else None
+        )
+        events.append({
+            "id": f"chat-{msg.id}",
+            "type": "chat",
+            "title": f"Chat{f': {topic_label}' if topic_label else ''}",
+            "description": snippet,
+            "created_at": msg.created_at.isoformat(),
+            "score": None,
+            "topic_id": msg.topic_id,
+            "href": f"/chat/{msg.topic_id}" if msg.topic_id else "/chat",
+        })
+
+    events.sort(key=lambda e: e["created_at"] or "", reverse=True)
+    return events[:limit]

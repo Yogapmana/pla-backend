@@ -63,7 +63,17 @@ async def heatmap_endpoint(
     shape. The frontend renders this as a 7×N grid (days of week
     × weeks).
     """
-    payload = await get_heatmap(db, str(current_user.id), days=days)
+    from app.services import metrics_cache
+
+    user_id = str(current_user.id)
+    cached = await metrics_cache.get_heatmap(user_id, days)
+    if cached is not None:
+        return cached
+
+    payload = await get_heatmap(db, user_id, days=days)
+    # HeatmapResponse may be a pydantic model or dict
+    to_store = payload.model_dump() if hasattr(payload, "model_dump") else payload
+    await metrics_cache.set_heatmap(user_id, days, to_store)
     return payload
 
 

@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     MINDMAP_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
     EMBEDDING_MODEL: str = Field(default="nomic-embed-text")
 
+    # RPS ↔ Curriculum verification (post-generation coverage audit)
+    RPS_VERIFY_ENABLED: bool = Field(default=True)
+    RPS_VERIFY_MODEL: str = Field(default="meta-llama/llama-3.3-70b-instruct")
+
     # LangSmith Tracing
     LANGSMITH_TRACING: bool = Field(default=False)
     LANGSMITH_API_KEY: str = Field(default="")
@@ -60,7 +64,15 @@ class Settings(BaseSettings):
 
     # Keamanan & Auth — set SECRET_KEY in .env (min 32 chars)
     SECRET_KEY: str = Field(default="")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=1440)
+    # Access JWT is short-lived; refresh cookie renews it (rotation).
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=15)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14)
+    # Empty = auto (Secure only if all CORS origins are https, no localhost).
+    # Set COOKIE_SECURE=true in pure HTTPS production if needed.
+    COOKIE_SECURE: str = Field(default="")
+    # Cross-site needs "none" (requires Secure). Same-site can stay "lax".
+    # Set COOKIE_SAMESITE=none in docker-compose (production) for vercel.app origin.
+    COOKIE_SAMESITE: str = Field(default="lax")
     GOOGLE_CLIENT_ID: str = Field(default="")
 
     # Email (Resend)

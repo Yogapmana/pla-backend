@@ -14,8 +14,8 @@ def generate_hypothetical_answer(query: str) -> str:
     try:
         llm = get_llm(settings.TUTOR_MODEL)
         prompt = (
-            f"Tulis jawaban singkat dan padat (2-3 kalimat) untuk pertanyaan berikut "
-            f"seolah-olah kamu adalah ahlinya:\n\nPertanyaan: {query}\n\nJawaban:"
+            f"Write a concise and direct answer (2-3 sentences) to the following question "
+            f"as if you are an expert:\n\nQuestion: {query}\n\nAnswer:"
         )
         response = llm.invoke(prompt)
         return response.content.strip()

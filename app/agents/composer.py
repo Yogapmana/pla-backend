@@ -25,6 +25,7 @@ WRITING RULES AND MODULE STRUCTURE:
 - Use a logical Markdown header hierarchy (`#`, `##`, `###`) that matches the sub-topic divisions from the sources.
 - Explain core concepts thoroughly and deeply. Use paragraphs, bullet points, or blockquotes fluidly.
 - IF there are comparative data, specifications, or technical summaries, it is highly recommended to create **Markdown tables** to make it more structured.
+- For ANY mathematical equations or formulas, you MUST use standard LaTeX delimiters: `$$ ... $$` for display/block equations and `$ ... $` for inline math. Do NOT use plain brackets `[ ... ]`.
 - Provide real-world examples or case studies if such information is available in the reference text.
 
 IMPORTANT:
@@ -54,6 +55,7 @@ WRITING RULES FOR REMEDIAL:
 - Focus on building a strong foundational understanding rather than overwhelming the student with complex jargon.
 - Use a logical Markdown header hierarchy (`#`, `##`, `###`).
 - IF there are comparative data, create Markdown tables to make it clearer.
+- For ANY mathematical equations, you MUST use `$$ ... $$` for block equations and `$ ... $` for inline math.
 
 IMPORTANT:
 - Output ONLY pure Markdown text without conversational filler at the very beginning (no "Here is your remedial module...").
@@ -79,6 +81,7 @@ WRITING RULES FOR DEEP DIVE:
 - Provoke critical thinking by exploring the "why" and the systemic impact of the topic.
 - Use a logical Markdown header hierarchy (`#`, `##`, `###`).
 - Use Markdown tables for technical specifications or comparative analyses if applicable.
+- For ANY mathematical equations, you MUST use `$$ ... $$` for block equations and `$ ... $` for inline math.
 
 IMPORTANT:
 - Output ONLY pure Markdown text without any conversational filler.

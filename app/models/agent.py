@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Float, Integer, DateTime, ForeignKey
+from sqlalchemy import Column, String, Float, Integer, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -18,6 +18,12 @@ class ChatMessage(Base):
     latency_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    __table_args__ = (
+        Index("ix_chat_messages_session_topic_created", "session_id", "topic_id", "created_at"),
+        Index("ix_chat_messages_session_role", "session_id", "role"),
+        Index("ix_chat_messages_session_created", "session_id", "created_at"),
+    )
+
 class QuizResult(Base):
     __tablename__ = "quiz_results"
 
@@ -32,6 +38,11 @@ class QuizResult(Base):
     time_spent_seconds = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    __table_args__ = (
+        Index("ix_quiz_results_session_topic_created", "session_id", "topic_id", "created_at"),
+        Index("ix_quiz_results_session_created", "session_id", "created_at"),
+    )
+
 class ProgressSignal(Base):
     __tablename__ = "progress_signals"
 
@@ -42,6 +53,11 @@ class ProgressSignal(Base):
     value = Column(Float, nullable=False)
     metadata_json = Column("metadata", JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_progress_signals_session_topic_created", "session_id", "topic_id", "created_at"),
+        Index("ix_progress_signals_session_type_created", "session_id", "signal_type", "created_at"),
+    )
 
 
 class AgentLog(Base):
@@ -64,4 +80,8 @@ class AgentLog(Base):
     message = Column(String, nullable=False)
     metadata_json = Column("metadata", JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_agent_logs_session_created", "session_id", "created_at"),
+    )
 

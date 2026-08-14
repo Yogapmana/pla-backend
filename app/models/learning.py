@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Date
+from sqlalchemy import Column, String, Integer, Float, DateTime, ForeignKey, Date, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 from app.db.database import Base
@@ -18,6 +18,11 @@ class LearningSession(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
+    __table_args__ = (
+        Index("ix_learning_sessions_user_created", "user_id", "created_at"),
+        Index("ix_learning_sessions_user_level", "user_id", "level"),
+    )
+
 class Curriculum(Base):
     __tablename__ = "curricula"
 
@@ -29,6 +34,10 @@ class Curriculum(Base):
     concept_graph_json = Column(JSONB, nullable=True)  # Cached concept graph (root → clusters → concepts → topics → resources)
     enhanced_mindmap_json = Column(JSONB, nullable=True) # NotebookLM-style enhanced mindmap
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_curricula_session_version", "session_id", "version"),
+    )
 
 class Topic(Base):
     __tablename__ = "topics"
@@ -52,6 +61,10 @@ class Topic(Base):
     material_rating_score = Column(Float, nullable=True)
     feedback_action = Column(String(100), nullable=True)
 
+    __table_args__ = (
+        Index("ix_topics_session_week_day", "session_id", "week_number", "day_number"),
+    )
+
 class LearningModule(Base):
     __tablename__ = "learning_modules"
 
@@ -67,6 +80,11 @@ class LearningModule(Base):
     word_count = Column(Integer, nullable=True)
     estimated_read_minutes = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_learning_modules_topic_id", "topic_id"),
+        Index("ix_learning_modules_session_id", "session_id"),
+    )
 
 class ResourceLink(Base):
     __tablename__ = "resource_links"
@@ -88,4 +106,9 @@ class ResourceLink(Base):
     embed_mode = Column(String(10), default="true")         # TRUE = embed ke RAG, FALSE = link saja
     click_count = Column(Integer, default=0)                # tracking engagement
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_resource_links_session_id", "session_id"),
+        Index("ix_resource_links_topic_id", "topic_id"),
+    )
 

@@ -15,8 +15,6 @@ from app.models.learning import LearningSession, Topic, LearningModule
 
 logger = logging.getLogger(__name__)
 
-import fitz  # PyMuPDF
-
 
 from app.services.learning_service import LearningService
 from app.tasks.run_orchestrator import run_learning_pipeline, resume_learning_pipeline
@@ -142,10 +140,10 @@ async def start_learning_session(
 
             filename_lower = file.filename.lower()
             if filename_lower.endswith(".pdf"):
-                doc = fitz.open(stream=content, filetype="pdf")
-                for page in doc:
-                    context_text += page.get_text() + "\n\n"
-                doc.close()
+                # PyMuPDF gagal membaca font RPS tanpa ToUnicode CMap →
+                # prioritas pdftotext -layout, fallback PyMuPDF.
+                from app.utils.pdf_extractor import extract_pdf_text
+                context_text += extract_pdf_text(content) + "\n\n"
             elif filename_lower.endswith(".docx"):
                 doc = docx.Document(io.BytesIO(content))
                 for para in doc.paragraphs:
@@ -157,8 +155,16 @@ async def start_learning_session(
         except Exception as e:
             logger.error(f"Error parsing file {file.filename}: {e}")
 
-    # Limit context_text to avoid hitting payload too large errors
-    if len(context_text) > 15000:
+    if context_text.strip():
+        logger.info(
+            "[ONBOARDING] reference doc parsed OK: %d chars "
+            "(akan jadi acuan kurikulum)", len(context_text),
+        )
+
+    # Limit context_text to avoid hitting payload too large errors.
+    # RPS khas (~15-20 halaman) bisa 40-60K karakter; potong diam-diam akan
+    # membuat planner kehilangan bahan kajian. Set 60K sebagai batas aman.
+    if len(context_text) > 60000:
         context_text = context_text[:15000] + "\n...[TRUNCATED]"
 
     session = await service.create_session(
@@ -403,10 +409,13 @@ async def get_topic_module(
     db: AsyncSession = Depends(get_db),
 ):
     """Get the learning module for a specific topic."""
+    from app.dependencies import verify_session_owner, verify_topic_owner
+
+    session = await verify_session_owner(session_id, current_user, db)
+    await verify_topic_owner(
+        topic_id, current_user, db, require_session_id=session.id
+    )
     service = LearningService(db)
-    session = await service.get_session(session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
     module = await service.get_module(topic_id)
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
@@ -432,39 +441,36 @@ async def complete_topic(
     db: AsyncSession = Depends(get_db),
 ):
     import logging
+    from app.dependencies import verify_session_owner, verify_topic_owner
+
     logger = logging.getLogger(__name__)
-    
     logger.info(f"[COMPLETE] Marking topic {topic_id} as completed for session {session_id}")
-    
+
+    session = await verify_session_owner(session_id, current_user, db)
+    topic_to_check = await verify_topic_owner(
+        topic_id, current_user, db, require_session_id=session.id
+    )
     service = LearningService(db)
-    session = await service.get_session(session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
-    
-    topic_to_check = await service.get_topic(topic_id)
-    if not topic_to_check:
-        raise HTTPException(status_code=404, detail="Topic not found")
-        
+
     # Validasi skor kuis minimal 80%
     if topic_to_check.quiz_score is None or topic_to_check.quiz_score < 0.80:
-        raise HTTPException(status_code=403, detail="Anda harus lulus kuis (minimal 80%) untuk lanjut ke materi berikutnya.")
-        
+        raise HTTPException(
+            status_code=403,
+            detail="Anda harus lulus kuis (minimal 80%) untuk lanjut ke materi berikutnya.",
+        )
+
     topic = await service.update_topic_status(topic_id, "completed")
-    
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
 
-    # Send progress email asynchronously
     send_progress_email_task.delay(current_user.email, current_user.username, topic.title)
 
     next_topic = await service.activate_next_topic(session_id, topic_id)
 
     if next_topic:
         logger.info(f"[COMPLETE] Next topic found: {next_topic.id}, status: {next_topic.status}")
-        # NOTE: Module generation for next topic is now triggered ONLY after quiz score >= 80%
-        # See POST /quiz/submit endpoint - it calls trigger_next_module_after_quiz() when score >= 80%
     else:
         logger.warning(f"[COMPLETE] No next topic found after {topic_id}")
-    
+
     return {
         "status": "ok",
         "topic_id": topic_id,

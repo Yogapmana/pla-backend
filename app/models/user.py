@@ -48,7 +48,7 @@ class User(Base):
     longest_streak = Column(
         Integer, nullable=False, default=0, server_default="0"
     )
-    last_login_date = Column(Date, nullable=True)
+    last_login_date = Column(Date, nullable=True, index=True)
 
     # ── Gamification: total XP ────────────────────────────────
     # Denormalized XP total — fast O(1) read in the Dashboard's

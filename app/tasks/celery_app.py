@@ -26,6 +26,8 @@ celery_app = Celery(
         "app.tasks.generate_supplementary",
         "app.tasks.generate_enhanced_mindmap",
         "app.tasks.email_tasks",
+        "app.tasks.chat_tasks",
+        "app.tasks.quiz_tasks",
     ],
 )
 

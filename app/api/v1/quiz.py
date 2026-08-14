@@ -1,6 +1,7 @@
 import uuid
-import random
+import logging
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.database import get_db
 from app.dependencies import get_current_user, verify_session_owner, verify_topic_owner
@@ -10,13 +11,16 @@ from app.models.learning import Topic
 from app.schemas.quiz import QuizResponse, QuizSubmission, QuizResultResponse, QuizQuestion
 from app.services.learning_service import LearningService
 from app.services.quiz_cache import (
-    store_quiz,
     consume_quiz,
     get_quiz as get_cached_quiz,
+    try_acquire_generate_lock,
+    release_generate_lock,
+    is_quiz_failed,
 )
 from app.tasks.generate_module import generate_module_for_topic
-from app.agents.tutor import tutor_generate_quiz
+from app.tasks.quiz_tasks import generate_quiz_task
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -29,15 +33,12 @@ async def get_quiz(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Generate MCQ quiz for a topic and cache it in Redis (30 min TTL).
+    Get MCQ quiz for a topic. Reuses Redis-cached unfinished quiz when
+    present (same quiz_id + questions); otherwise generates via LLM and
+    caches with 30 min TTL (refreshed on reopen).
 
-    Returns a quiz_id alongside the questions; clients must send the
-    quiz_id back on submit so we can grade against the exact same
-    questions (replay-safe, token-efficient).
-
-    The topic must belong to a session owned by the caller — otherwise any
-    authenticated user could generate (and burn LLM tokens on) quizzes for
-    another user's topics.
+    Clients must send quiz_id back on submit for replay-safe grading.
+    Concurrent generates for the same user+topic are coalesced via lock.
     """
     # Ownership: topic must belong to one of the caller's sessions.
     topic = await verify_topic_owner(topic_id, current_user, db)
@@ -90,30 +91,61 @@ async def get_quiz(
         dynamic_num = 20
         difficulty = "sulit"
 
-    questions_data = await tutor_generate_quiz(
-        user_id=str(current_user.id),
-        topic_id=topic_id,
-        topic_title=topic_id.replace("_", " ").title(),
-        language=session.language,
-        num_questions=dynamic_num,
-        difficulty=difficulty,
+    uid = str(current_user.id)
+
+    # Reuse unfinished quiz when user leaves and reopens page.
+    cached_quiz = await get_cached_quiz(
+        user_id=uid, topic_id=topic_id, refresh_ttl=True
     )
+    if cached_quiz and cached_quiz.get("questions"):
+        questions_data = cached_quiz["questions"]
+        quiz_id = cached_quiz["quiz_id"]
+    else:
+        # Not generated yet — enqueue a Celery task and return 202 so the
+        # client polls this same endpoint until the cache is populated.
+        if await is_quiz_failed(uid, topic_id):
+            # Recent generation failed; don't re-enqueue into an infinite loop.
+            raise HTTPException(
+                status_code=404,
+                detail="Could not generate quiz. Make sure the topic has been indexed first.",
+            )
 
-    if questions_data:
-        random.shuffle(questions_data)
+        got_lock = await try_acquire_generate_lock(uid, topic_id)
+        if not got_lock:
+            # Another request is already generating — keep polling (202).
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "generating",
+                    "detail": "Quiz masih digenerate. Coba lagi beberapa saat.",
+                },
+            )
 
-    if not questions_data:
-        raise HTTPException(
-            status_code=404,
-            detail="Could not generate quiz. Make sure the topic has been indexed first.",
+        # We hold the lock. The task refreshes its TTL while generating and
+        # releases it when done, so no inline LLM work blocks this event loop.
+        try:
+            generate_quiz_task.delay(
+                user_id=uid,
+                topic_id=topic_id,
+                topic_title=topic_id.replace("_", " ").title(),
+                language=session.language,
+                num_questions=dynamic_num,
+                difficulty=difficulty,
+            )
+        except Exception:
+            logger.exception("Failed to enqueue quiz generation task")
+            await release_generate_lock(uid, topic_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Gagal menjadwalkan generate quiz. Coba lagi sebentar.",
+            )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "generating",
+                "detail": "Quiz masih digenerate. Coba lagi beberapa saat.",
+            },
         )
-
-    # Cache the questions and obtain a stable quiz_id
-    quiz_id = await store_quiz(
-        user_id=str(current_user.id),
-        topic_id=topic_id,
-        questions=questions_data,
-    )
 
     questions = [QuizQuestion(**q) for q in questions_data]
     time_limit_seconds = time_limit_per_question * len(questions)
@@ -246,6 +278,14 @@ async def submit_quiz(
     )
     db.add(new_signal)
     await db.commit()
+
+    # Invalidate dashboard metric caches for this session + user heatmap
+    from app.services.metrics_cache import (
+        invalidate_session_metrics,
+        invalidate_user_heatmap,
+    )
+    await invalidate_session_metrics(str(submission.session_id))
+    await invalidate_user_heatmap(str(current_user.id))
 
     import asyncio
     asyncio.create_task(

@@ -73,8 +73,10 @@ def planner_node(state: SynapsaState) -> SynapsaState:
         state["agent_logs"] = []
     state["agent_logs"].append(log)
 
-    # Initialize LLM with structured output and large token limit for long curriculums
-    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2)
+    # Initialize LLM with structured output and large token limit for long curriculums.
+    # Kalau ada RPS (context_text), prompt jadi besar (puluhan ribu chars) →
+    # model 70B/free tier sering >90s. Naikan timeout jauh (jalan di background).
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.2, timeout=450)
     from app.utils.llm_factory import uses_json_mode
     if uses_json_mode(llm):
         structured_llm = llm.with_structured_output(Curriculum, method="json_mode")
@@ -90,7 +92,30 @@ def planner_node(state: SynapsaState) -> SynapsaState:
     
     context_text_instruction = ""
     if config.context_text:
-        context_text_instruction = f"\nUser Reference Document / Roadmap:\n{config.context_text}\n\nIMPORTANT: Use the reference document/roadmap above as the primary guide in structuring the sequence, outline, and scope of the curriculum topics.\n"
+        logger.info(
+            "[PLANNER] reference/RPS doc received and forwarded to prompt "
+            "(%d chars)", len(config.context_text),
+        )
+        from app.utils.pdf_extractor import extract_rps_material_section
+        rps_material = extract_rps_material_section(config.context_text)
+        logger.info(
+            "[PLANNER] RPS material section sent to LLM: %d chars",
+            len(rps_material),
+        )
+        context_text_instruction = f"""
+You are given a Reference Document (usually a course syllabus / RPS) below. It is the AUTHORITATIVE source for this curriculum.
+
+STRICT RULES when a Reference Document is provided:
+1. STRUCTURE MUST FOLLOW THE REFERENCE: Build the weekly modules so the material, sequence, and scope map to the reference's per-week teaching plan (e.g. its "Minggu | Bahan Kajian/Sub-CPMK" table). Preserve the order of topics as written in the reference.
+2. DO NOT INVENT TOPICS: Only produce topics/weeks that appear in the reference. If you need filler to reach the requested duration, merge or split reference weeks — do NOT add new subjects (e.g. do not add "cloud", "troubleshooting", "wireless" or similar extra topics unless the reference actually contains them).
+3. IGNORE INCONSISTENT BOILERPLATE: Some RPS files contain stale/unrelated sections (e.g. a "Deskripsi Singkat" or "Bahan Kajian" header copied from another course). Trust the detailed per-week material table, not those short descriptive sections.
+4. COVER ALL REFERENCE CONTENT: Make sure important topics from the reference appear in at least one week. Missing core layers/modules is a failure.
+
+User Reference Document / Roadmap:
+{rps_material}
+
+"""
+
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -222,7 +247,7 @@ def replan_node(state: SynapsaState) -> SynapsaState:
     if week_idx == -1:
         return state
 
-    llm = get_llm(settings.PLANNER_MODEL, temperature=0.3)
+    llm = get_llm(settings.PLANNER_MODEL, temperature=0.3, timeout=300)
     from app.utils.llm_factory import uses_json_mode
     from app.agents.state import DaySchedule
     if uses_json_mode(llm):

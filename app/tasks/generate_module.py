@@ -2,9 +2,12 @@ import asyncio
 import uuid
 from datetime import datetime
 
+from redis import asyncio as aioredis
+
 from app.tasks.celery_app import celery_app
 from app.db.database import AsyncSession, engine
 from app.services.learning_service import LearningService
+from app.config import settings
 from app.models.learning import LearningModule as DBLearningModule
 from app.utils.log_broker import publish_log
 from app.agents.state import (
@@ -33,8 +36,7 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
     # Clear inherited connections from parent process BEFORE creating the new asyncio loop
     engine.sync_engine.dispose(close=False)
     
-    async def _run():
-
+    async def _generate():
         async with AsyncSession(engine) as db:
             service = LearningService(db)
             
@@ -237,6 +239,32 @@ def generate_module_for_topic(self, session_id: str, user_id: str, topic_id: str
                 "title": generated_module.title,
             }
     
+    async def _run():
+        # Both the module page and quiz evaluation can enqueue this task.
+        # Acquire the lock inside the task so every entry point is protected.
+        redis = aioredis.from_url(settings.REDIS_URL)
+        lock_key = f"lock:generate_module:{topic_id}"
+        lock_token = str(uuid.uuid4())
+        lock_acquired = await redis.set(lock_key, lock_token, ex=900, nx=True)
+
+        if not lock_acquired:
+            await redis.close()
+            return {"status": "already_generating", "topic_id": topic_id}
+
+        try:
+            return await _generate()
+        finally:
+            # Delete only our own lock. A late task must never remove a newer
+            # lock after the original 15-minute TTL has expired.
+            await redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                lock_key,
+                lock_token,
+            )
+            await redis.close()
+
     try:
         # Use existing event loop if available, or create new one
         try:

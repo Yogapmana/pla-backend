@@ -330,8 +330,12 @@ async def mindmap_mapper_node(state: SynapsaState) -> dict:
         return {}
 
     topics_json = json.dumps(all_topics, ensure_ascii=False, indent=2)
+    
+    # Map code to full name for better LLM adherence
+    lang_full = "English" if language.lower() in ("en", "english") else "Indonesian"
+    
     prompt = CONCEPT_EXTRACTION_PROMPT.format(
-        course_title=course_title, language=language, topics_json=topics_json
+        course_title=course_title, language=lang_full, topics_json=topics_json
     )
 
     try:
@@ -434,15 +438,21 @@ async def mindmap_v2_mapper(
         topics_summary, ensure_ascii=False, indent=2
     )
 
+    # Map code to full name for better LLM adherence
+    lang_full = "English" if language.lower() in ("en", "english") else "Indonesian"
+
     prompt = MINDMAP_V2_PROMPT.format(
         course_title=course_title,
         level=level,
-        language=language,
+        language=lang_full,
         topics_summary=topics_summary_json,
         research_json=research_json,
     )
 
-    llm = get_llm(model_used, temperature=0.3)
+    # Background task: prompt besar (semua hasil research) + model 70B lewat
+    # OpenRouter sering >90s. timeout default 90s membuat 3x retry timeout lalu
+    # gagal total. Beri headroom besar karena jalan di Celery (soft limit 30m).
+    llm = get_llm(model_used, temperature=0.3, timeout=420)
     from app.utils.llm_factory import uses_json_mode
     from langchain_core.output_parsers import JsonOutputParser
 

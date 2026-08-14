@@ -4,8 +4,8 @@ from app.config import settings
 
 
 def uses_json_mode(llm) -> bool:
-    """OpenAI-compatible providers (OpenRouter) need json_mode for structured output."""
-    return isinstance(llm, ChatOpenAI)
+    """OpenAI-compatible providers (OpenRouter, Groq) need json_mode for structured output."""
+    return llm.__class__.__name__ in ("ChatOpenAI", "ChatGroq")
 
 
 def _is_ollama_model(model_name: str) -> bool:
@@ -15,11 +15,17 @@ def _is_ollama_model(model_name: str) -> bool:
     return ":" in model_name and "/" not in model_name
 
 
-def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = None):
+def get_llm(
+    model_name: str,
+    temperature: float = 0.2,
+    max_tokens: int | None = None,
+    timeout: int = 90,
+):
     """
     Return LLM for model name.
     - Ollama: local models (name:tag)
     - OpenRouter: everything else (model ID from .env)
+    - timeout: per-request HTTP timeout in seconds (raise for RAGAS)
     """
     kwargs: dict = {"temperature": temperature}
     if max_tokens is not None:
@@ -34,6 +40,20 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
             **kwargs,
         )
 
+    if model_name.startswith("groq/"):
+        from langchain_groq import ChatGroq
+        groq_name = model_name.removeprefix("groq/")
+        groq_api_key = (settings.GROQ_API_KEY or "").strip()
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY kosong. Isi di .env")
+        return ChatGroq(
+            api_key=groq_api_key,
+            model_name=groq_name,
+            max_retries=3,
+            timeout=timeout,
+            **kwargs,
+        )
+
     api_key = (settings.OPENROUTER_API_KEY or "").strip()
     if not api_key:
         raise ValueError(
@@ -44,8 +64,8 @@ def get_llm(model_name: str, temperature: float = 0.2, max_tokens: int | None = 
         model=model_name,
         api_key=api_key,
         base_url=settings.OPENROUTER_BASE_URL,
-        max_retries=5,
-        timeout=180,
+        max_retries=3,
+        timeout=timeout,
         default_headers={
             "HTTP-Referer": "https://github.com/synapsa",
             "X-Title": "Synapsa PLA",

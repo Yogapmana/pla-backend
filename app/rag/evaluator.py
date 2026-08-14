@@ -26,16 +26,40 @@ logger = logging.getLogger(__name__)
 
 
 def _try_ragas():
-    """Lazy import of RAGAS. Returns (RAGEvaluator, available).
-
-    Disabled by default (RAGAS_Groq incompatibility). Set env
-    ENABLE_RAGAS=1 to opt in.
+    """Lazy import of RAGAS and setup Indonesian prompts.
+    Returns (available, evaluate, faithfulness, answer_relevancy).
     """
-    if not os.getenv("ENABLE_RAGAS", "").lower() in ("1", "true", "yes"):
-        return {"available": False, "reason": "ENABLE_RAGAS not set"}
     try:
         from ragas import evaluate  # noqa: F401
         from ragas.metrics import faithfulness, answer_relevancy  # noqa: F401
+        
+        # Translate RAGAS Prompts to Indonesian (Lokalisasi)
+        faithfulness.statement_generator_prompt.instruction = (
+            "Diberikan sebuah pertanyaan dan jawaban, analisis kompleksitas setiap kalimat dalam jawaban. "
+            "Pecah setiap kalimat menjadi satu atau lebih pernyataan yang sepenuhnya dapat dipahami. "
+            "Pastikan tidak ada kata ganti (seperti 'dia', 'mereka', 'ini', 'itu') yang digunakan dalam setiap pernyataan. "
+            "Format output dalam JSON."
+        )
+        
+        if hasattr(faithfulness, 'nli_statements_prompt'):
+            faithfulness.nli_statements_prompt.instruction = (
+                "Tugas Anda adalah menilai faktualitas dari serangkaian pernyataan berdasarkan konteks yang diberikan. "
+                "Untuk setiap pernyataan, kembalikan verdict 1 jika pernyataan tersebut dapat disimpulkan secara langsung dari konteks, "
+                "atau 0 jika pernyataan tidak dapat disimpulkan secara langsung dari konteks."
+            )
+        elif hasattr(faithfulness, 'nli_statement_prompt'):
+            faithfulness.nli_statement_prompt.instruction = (
+                "Tugas Anda adalah menilai faktualitas dari serangkaian pernyataan berdasarkan konteks yang diberikan. "
+                "Untuk setiap pernyataan, kembalikan verdict 1 jika pernyataan tersebut dapat disimpulkan secara langsung dari konteks, "
+                "atau 0 jika pernyataan tidak dapat disimpulkan secara langsung dari konteks."
+            )
+            
+        answer_relevancy.question_generation.instruction = (
+            "Hasilkan sebuah pertanyaan untuk jawaban yang diberikan dan identifikasi apakah jawaban tersebut bersifat mengelak (noncommittal). "
+            "Berikan nilai noncommittal 1 jika jawaban bersifat mengelak/tidak pasti, dan 0 jika jawaban bersifat pasti. "
+            "Jawaban yang mengelak adalah jawaban yang ambigu, samar, atau menghindar. Contohnya, 'Saya tidak tahu' atau 'Saya kurang yakin'."
+        )
+
         return {
             "available": True,
             "evaluate": evaluate,
@@ -44,7 +68,6 @@ def _try_ragas():
         }
     except ImportError:
         return {"available": False, "reason": "ragas package not installed"}
-
 
 _RAGAS = _try_ragas()
 
@@ -70,6 +93,11 @@ class RAGEvaluator:
         if not answer or not question:
             return {"rag_faithfulness": None, "rag_answer_relevancy": None, "method": "skipped"}
 
+        # Cek apakah evaluasi dimatikan secara manual via .env
+        if os.getenv("DISABLE_RAGAS") == "1" or os.getenv("DISABLE_RAGAS", "").lower() == "true":
+            logger.info("[RAGAS] Evaluation is disabled via DISABLE_RAGAS env variable.")
+            return {"rag_faithfulness": None, "rag_answer_relevancy": None, "method": "disabled"}
+
         # Try RAGAS first; fall back to lightweight LLM judge.
         if _RAGAS.get("available") and self.embeddings is not None:
             try:
@@ -87,6 +115,7 @@ class RAGEvaluator:
     def _run_ragas(self, question: str, answer: str, contexts: list[str]) -> dict[str, Any]:
         """Run real RAGAS evaluation (sync; called via to_thread)."""
         from datasets import Dataset  # ragas depends on it
+        from ragas.run_config import RunConfig
 
         data = {
             "question": [question],
@@ -99,6 +128,13 @@ class RAGEvaluator:
             metrics=[_RAGAS["faithfulness"], _RAGAS["answer_relevancy"]],
             llm=self.llm,
             embeddings=self.embeddings,
+            raise_exceptions=False,
+            run_config=RunConfig(
+                max_workers=1,
+                timeout=3600,
+                max_retries=10,
+                max_wait=120,
+            ),
         )
         return {
             "rag_faithfulness": _extract_score(result, "faithfulness"),
@@ -297,10 +333,14 @@ def get_rag_evaluator() -> RAGEvaluator | None:
         # often long; default 1024 is too low and causes LLMDidNotFinish).
         # We explicitly use a smaller model for evaluation to save API tokens and avoid Rate Limits!
         try:
-            llm = get_llm(settings.RAGAS_MODEL, max_tokens=2048)
+            # timeout=600: faithfulness multi-step calls need headroom
+            llm = get_llm(settings.RAGAS_MODEL, max_tokens=2048, timeout=600)
         except TypeError:
-            # llm_factory doesn't accept max_tokens; fall back to default
-            llm = get_llm(settings.RAGAS_MODEL)
+            # llm_factory doesn't accept max_tokens/timeout; fall back
+            try:
+                llm = get_llm(settings.RAGAS_MODEL, max_tokens=2048)
+            except TypeError:
+                llm = get_llm(settings.RAGAS_MODEL)
 
         embeddings = None
         try:

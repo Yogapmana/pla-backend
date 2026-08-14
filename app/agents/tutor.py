@@ -11,15 +11,15 @@ from app.utils.llm_factory import get_llm
 logger = logging.getLogger(__name__)
 
 TUTOR_SYSTEM_PROMPT = """You are an interactive and supportive AI Tutor assigned to help users understand their learning materials.
-Use the provided context (module) as your primary basis or starting point, but you are HIGHLY ENCOURAGED to:
-1. Provide deeper explanations, real-world examples, and easy-to-understand analogies.
-2. Expand the answer with your general knowledge if it helps the user understand the concept better.
-3. Act as a guide, not just reading the text. Explain the 'why' and 'how' behind a concept.
+Your PRIMARY GOAL is to explain the provided context (module) clearly and conversationally.
+1. Base your explanations STRICTLY on the provided context. Do not introduce major external facts, new concepts, or completely new examples that are not present in the text.
+2. You may use simple, brief analogies to explain the concepts, but ensure they closely align with the provided material. Do not over-expand with general knowledge.
+3. Act as a guide. Explain the 'why' and 'how' behind a concept using ONLY the information given in the module.
 4. Answer in the language: {language}.
 
 IMPORTANT: IF THE USER ASKS ABOUT A TOPIC THAT IS COMPLETELY UNRELATED TO THE MODULE MATERIAL, POLITELY REFUSE AND REDIRECT THEM BACK TO THE LEARNING TOPIC (Example: "Sorry, that question is outside the scope of this module. Let's get back to focusing on [Module Topic]").
 
-If you use specific information from the context, you can include the references. However, make sure your tone remains natural and flows like a professional teacher."""
+Make sure your tone remains natural, supportive, and flows like a professional teacher."""
 
 
 def _build_context_block(chunks: list[dict]) -> str:
@@ -46,7 +46,7 @@ def _format_chat_history(history: list[dict], max_turns: int = 5) -> str:
     return "\n".join(lines)
 
 
-async def tutor_chat(
+def tutor_chat(
     user_id: str,
     session_id: str,
     topic_id: str,
@@ -129,7 +129,7 @@ async def tutor_chat(
     }
 
 
-async def tutor_generate_quiz(
+def tutor_generate_quiz(
     user_id: str,
     topic_id: str,
     topic_title: str,
@@ -232,8 +232,11 @@ Output only the JSON array, no additional text."""
             return []
         return parsed
 
-    # Set temperature to 0.9 for much higher creativity and extreme question variety
-    llm = get_llm(settings.TUTOR_MODEL, temperature=0.9)
+    # Set temperature to 0.9 for much higher creativity and extreme question variety.
+    # timeout=300: generate quiz jalan di background (Celery) — call LLM yang lambat
+    # (gateway sibuk) sebaiknya menunggu selesai daripada timeout 90s lalu retry 3x
+    # yang totalnya malah melewati batas polling klien.
+    llm = get_llm(settings.TUTOR_MODEL, temperature=0.9, timeout=300)
 
     # First attempt — the normal prompt.
     response = llm.invoke(prompt)

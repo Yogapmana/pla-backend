@@ -53,16 +53,13 @@ manager = ConnectionManager()
 
 
 async def verify_ws_token(token: str) -> str | None:
-    """Verify JWT token and return user_id."""
+    """Verify access JWT and return user_id (reject refresh tokens)."""
     try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=["HS256"],
-        )
-        user_id: str = payload.get("sub")
-        return user_id
-    except jwt.PyJWTError:
+        from app.services.auth_service import decode_token
+
+        payload = decode_token(token, expected_type="access")
+        return payload.get("sub")
+    except Exception:
         return None
 
 
@@ -162,6 +159,9 @@ async def agent_log_stream(
             await websocket.receive_text()
     except WebSocketDisconnect:
         pass
+    except RuntimeError as e:
+        if "WebSocket is not connected" not in str(e):
+            raise
     finally:
         if subscriber_task is not None:
             subscriber_task.cancel()

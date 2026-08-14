@@ -152,7 +152,7 @@ async def _notify_curriculum_ready(user_id: str, session_id: str) -> None:
                     "Mari mulai belajar hari ini!"
                 ),
                 notification_type="curriculum_ready",
-                link=f"/dashboard/{session_id}",
+                link="/dashboard",
             )
     except Exception as notif_exc:
         logger.warning(
@@ -193,6 +193,7 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
             level=config["level"],
             hours_per_day=config["hours_per_day"],
             language=config.get("language", "id"),
+            context_text=config.get("context_text"),
         )
 
         initial_state: SynapsaState = {
@@ -216,12 +217,39 @@ def run_learning_pipeline(self, session_id: str, user_id: str, config: dict):
         modules = final_state.get("modules", [])
 
         async with AsyncSession(engine) as db:
-            await save_curriculum_and_topics(
+            curriculum_rec = await save_curriculum_and_topics(
                 db,
                 session_id,
                 curriculum,
                 final_state.get("concept_graph"),
             )
+
+            # RPS coverage audit: if the user uploaded a reference document,
+            # verify the generated curriculum actually covers it and attach
+            # the report to curriculum_json["audit"]["rps_coverage"].
+            if curriculum_rec is not None and config.get("context_text"):
+                if not settings.RPS_VERIFY_ENABLED:
+                    logger.info("[RUN-ORCHESTRATOR] RPS verification disabled by config")
+                else:
+                    from app.services.rps_verifier import verify_rps_coverage
+                    try:
+                        rps_audit = await verify_rps_coverage(
+                            config["context_text"], curriculum_rec.curriculum_json
+                        )
+                        # Reassign a fresh dict: JSONB does NOT detect in-place
+                        # mutation, otherwise the audit would be lost on commit.
+                        cjson = dict(curriculum_rec.curriculum_json or {})
+                        cjson.setdefault("audit", {})["rps_coverage"] = rps_audit
+                        curriculum_rec.curriculum_json = cjson
+                        logger.info(
+                            "[RUN-ORCHESTRATOR] RPS coverage: %.0f%% aligned",
+                            rps_audit.get("alignment_score", 0),
+                        )
+                    except Exception as rps_exc:
+                        logger.warning(
+                            "[RUN-ORCHESTRATOR] RPS verification failed: %s", rps_exc
+                        )
+
             topic_module_map = await save_modules_and_links(
                 db,
                 session_id,

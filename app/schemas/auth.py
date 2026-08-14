@@ -57,8 +57,10 @@ class StreakInfo(BaseModel):
 
 
 class Token(BaseModel):
+    # Access token is also set as httpOnly cookie; body value kept for
+    # WebSocket ?token= bootstrap and gradual migration.
     access_token: str
-    token_type: str
+    token_type: str = "bearer"
     user: UserResponse
     # Streak info is included on login/register. On /me and
     # /refresh, the response doesn't include this field (it stays

@@ -23,7 +23,11 @@ from app.config import settings
 async def lifespan(app: FastAPI):
     redis = aioredis.from_url(settings.REDIS_URL, encoding="utf8", decode_responses=True)
     FastAPICache.init(RedisBackend(redis), prefix="pla-cache")
+    # Warm shared Redis pool used by metrics/quiz/log helpers
+    from app.utils.redis_client import get_redis, close_redis
+    await get_redis()
     yield
+    await close_redis()
 
 app = FastAPI(
     title="Personal Learning Agent API",

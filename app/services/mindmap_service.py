@@ -30,6 +30,7 @@ Design notes
 - The cache is invalidated when the curriculum version changes (re-plan) or
   when the user explicitly hits the ``/regenerate`` endpoint.
 """
+
 from __future__ import annotations
 
 import json
@@ -39,12 +40,11 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.config import settings
 from app.models.learning import Curriculum
 from app.utils.llm_factory import get_llm
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class MindmapLLMResult(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-MINDMAP_PROMPT_TEMSynapsaTE = """Anda adalah AI yang membantu membuat peta konsep (mind map) dari sebuah kurikulum pembelajaran.
+MINDMAP_PROMPT_TEMPLATE = """Anda adalah AI yang membantu membuat peta konsep (mind map) dari sebuah kurikulum pembelajaran.
 
 Tugas: Mengubah daftar topik kurikulum di bawah ini menjadi sebuah diagram Mermaid ``mindmap`` yang rapi.
 
@@ -150,7 +150,8 @@ class MindmapService:
             if isinstance(cached, dict) and cached.get("syntax"):
                 logger.info(
                     "[MINDMAP] Cache hit for session %s (node_count=%s)",
-                    session_id, cached.get("node_count"),
+                    session_id,
+                    cached.get("node_count"),
                 )
                 return cached
 
@@ -209,9 +210,8 @@ class MindmapService:
             logger.warning("[MINDMAP] LLM generation failed: %s — using fallback", exc)
 
         # Fallback to deterministic mind map if LLM failed or returned invalid syntax
-        used_fallback = (
-            not llm_result
-            or not self._is_valid_mermaid_mindmap(llm_result["syntax"])
+        used_fallback = not llm_result or not self._is_valid_mermaid_mindmap(
+            llm_result["syntax"]
         )
         if used_fallback:
             logger.info("[MINDMAP] Using deterministic fallback mind map")
@@ -235,7 +235,8 @@ class MindmapService:
 
         logger.info(
             "[MINDMAP] Persisted mind map for session %s (node_count=%s)",
-            session_id, payload["node_count"],
+            session_id,
+            payload["node_count"],
         )
         return payload
 
@@ -254,7 +255,7 @@ class MindmapService:
         llm = get_llm(model_name, temperature=0.2)
         structured_llm = llm.with_structured_output(MindmapLLMResult)
 
-        prompt = MINDMAP_PROMPT_TEMSynapsaTE.format(
+        prompt = MINDMAP_PROMPT_TEMPLATE.format(
             course_title=course_title,
             level=level,
             language=language,

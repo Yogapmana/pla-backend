@@ -84,7 +84,7 @@ async def _run(session_id: str, task) -> dict:
     logger.info("[ENHANCED-MINDMAP] starting for session %s", session_id)
 
     # Clear inherited connections attached to different event loops
-    await engine.dispose()
+    engine.sync_engine.dispose(close=False)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
     try:

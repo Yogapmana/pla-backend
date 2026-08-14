@@ -4,3 +4,4 @@ from app.models.agent import ChatMessage, QuizResult, ProgressSignal
 from app.models.login_event import LoginEvent
 from app.models.xp_event import XpEvent
 from app.models.notification import Notification
+from app.models.refresh_token import RefreshToken

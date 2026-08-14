@@ -1,27 +1,53 @@
 import uuid
+from typing import Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
 from app.db.database import get_db
 from app.config import settings
 from app.schemas.auth import TokenData
 from app.models.user import User
 from app.models.learning import LearningSession, Topic
+from app.services.auth_service import ACCESS_COOKIE, decode_token
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# auto_error=False so we can fall back to httpOnly cookie
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/v1/auth/login",
+    auto_error=False,
+)
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)):
+
+def _extract_access_token(
+    request: Request,
+    bearer: Optional[str],
+) -> Optional[str]:
+    """Prefer Authorization Bearer, else pla_access httpOnly cookie."""
+    if bearer:
+        return bearer
+    return request.cookies.get(ACCESS_COOKIE)
+
+
+async def get_current_user(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    raw = _extract_access_token(request, token)
+    if not raw:
+        raise credentials_exception
+
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        user_id: str = payload.get("sub")
+        payload = decode_token(raw, expected_type="access")
+        user_id: str | None = payload.get("sub")
         if user_id is None:
             raise credentials_exception
         token_data = TokenData(user_id=user_id)

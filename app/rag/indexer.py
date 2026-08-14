@@ -1,5 +1,4 @@
 import logging
-import fitz  # PyMuPDF
 from io import BytesIO
 from app.rag.chunker import chunk_markdown
 from app.rag.embedder import embed_texts
@@ -65,11 +64,9 @@ def extract_text_from_file(file_bytes: bytes, filename: str) -> str:
     filename_lower = filename.lower()
 
     if filename_lower.endswith(".pdf"):
-        # Use PyMuPDF to extract text
-        doc = fitz.open(stream=file_bytes, filetype="pdf")
-        for page in doc:
-            text += page.get_text("text") + "\n\n"
-        doc.close()
+        # Same robust extractor as onboarding (pdftotext, fallback PyMuPDF).
+        from app.utils.pdf_extractor import extract_pdf_text
+        text = extract_pdf_text(file_bytes)
     elif filename_lower.endswith((".txt", ".md")):
         # Decode as utf-8
         text = file_bytes.decode("utf-8", errors="ignore")

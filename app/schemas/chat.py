@@ -34,6 +34,20 @@ class ChatResponse(BaseModel):
     sources: list[ChatSource] = []
     rag_metrics: RAGMetrics
 
+class ChatJobAccepted(BaseModel):
+    """202 response: chat message accepted, LLM runs in a Celery task."""
+    job_id: str
+    status: str = "queued"
+
+class ChatJobStatus(BaseModel):
+    """Polling result for GET /chat/job/{job_id}."""
+    job_id: str
+    status: str  # queued | running | done | failed
+    message_id: str | None = None
+    response: str | None = None
+    sources: list[ChatSource] = []
+    error: str | None = None
+
 class ChatHistoryMessage(BaseModel):
     id: str
     role: str

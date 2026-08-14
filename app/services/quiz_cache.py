@@ -10,10 +10,13 @@ Why this exists:
   answers for the same questions) and wasted tokens.
 
 This cache:
-- Stores the generated questions under `quiz:{user_id}:{topic_id}` with a
-  30-minute TTL.
+- Stores the generated questions under `quiz:{user_id}:{topic_id}:{quiz_id}`
+  with a 30-minute TTL (refreshed on reopen).
 - Returns a stable `quiz_id` to the client, which the client must send
   back on submit so we can grade against the exact same questions.
+- GET reuses an unfinished quiz instead of calling the LLM again.
+- A short generate lock stops concurrent LLM calls for the same user+topic
+  (user leaves mid-load then reopens).
 - On submit, the cache entry is consumed (deleted) — a quiz can only be
   submitted once successfully, preventing replay.
 """
@@ -31,6 +34,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 QUIZ_TTL_SECONDS = 30 * 60  # 30 minutes
+GEN_LOCK_TTL_SECONDS = 3 * 60  # LLM generate can be slow
 KEY_PREFIX = "quiz:"
 
 
@@ -41,6 +45,10 @@ def _key(user_id: str, topic_id: str, quiz_id: str) -> str:
 def _index_key(user_id: str, topic_id: str) -> str:
     """Side-index mapping (user, topic) → current active quiz_id."""
     return f"{KEY_PREFIX}{user_id}:{topic_id}:current"
+
+
+def _lock_key(user_id: str, topic_id: str) -> str:
+    return f"{KEY_PREFIX}{user_id}:{topic_id}:generating"
 
 
 async def _get_client():
@@ -113,6 +121,9 @@ async def get_quiz(
     user_id: str,
     topic_id: str,
     quiz_id: Optional[str] = None,
+    *,
+    refresh_ttl: bool = False,
+    ttl_seconds: int = QUIZ_TTL_SECONDS,
 ) -> Optional[dict[str, Any]]:
     """
     Retrieve cached quiz questions. If quiz_id is given, look up that exact
@@ -120,6 +131,9 @@ async def get_quiz(
 
     Returns the full payload (including the list of questions) or None on
     miss / cache error.
+
+    When refresh_ttl is True (reopen unfinished quiz), both keys get a new
+    TTL so leaving/returning does not silently expire mid-attempt.
     """
     client = await _get_client()
     try:
@@ -130,12 +144,124 @@ async def get_quiz(
         raw = await client.get(_key(user_id, topic_id, quiz_id))
         if not raw:
             return None
+        if refresh_ttl:
+            quiz_key = _key(user_id, topic_id, quiz_id)
+            index_key = _index_key(user_id, topic_id)
+            try:
+                await client.expire(quiz_key, ttl_seconds)
+                await client.expire(index_key, ttl_seconds)
+            except Exception as e:
+                logger.warning(
+                    f"[QUIZ_CACHE] TTL refresh failed for {user_id}/{topic_id}: {e}"
+                )
         return json.loads(raw)
     except Exception as e:
         logger.warning(f"[QUIZ_CACHE] get failed for {user_id}/{topic_id}: {e}")
         return None
     finally:
         await _close(client)
+
+
+async def try_acquire_generate_lock(
+    user_id: str,
+    topic_id: str,
+    ttl_seconds: int = GEN_LOCK_TTL_SECONDS,
+) -> bool:
+    """SET NX lock so only one LLM generate runs per user+topic."""
+    client = await _get_client()
+    try:
+        ok = await client.set(
+            _lock_key(user_id, topic_id),
+            "1",
+            nx=True,
+            ex=ttl_seconds,
+        )
+        return bool(ok)
+    except Exception as e:
+        logger.warning(f"[QUIZ_CACHE] lock acquire failed for {user_id}/{topic_id}: {e}")
+        # Fail open: allow generate rather than block forever
+        return True
+    finally:
+        await _close(client)
+
+
+async def release_generate_lock(user_id: str, topic_id: str) -> None:
+    client = await _get_client()
+    try:
+        await client.delete(_lock_key(user_id, topic_id))
+    except Exception as e:
+        logger.warning(f"[QUIZ_CACHE] lock release failed for {user_id}/{topic_id}: {e}")
+    finally:
+        await _close(client)
+
+
+async def refresh_generate_lock(
+    user_id: str,
+    topic_id: str,
+    ttl_seconds: int = GEN_LOCK_TTL_SECONDS,
+) -> None:
+    """Extend the generate lock TTL — used by the Celery task while the LLM
+    is still generating (the endpoint holds the lock, the task keeps it alive)."""
+    client = await _get_client()
+    try:
+        await client.expire(_lock_key(user_id, topic_id), ttl_seconds)
+    except Exception as e:
+        logger.warning(f"[QUIZ_CACHE] lock refresh failed for {user_id}/{topic_id}: {e}")
+    finally:
+        await _close(client)
+
+
+QUIZ_FAIL_TTL_SECONDS = 2 * 60  # 2 minutes — avoid infinite regenerate loops
+
+
+def _fail_key(user_id: str, topic_id: str) -> str:
+    return f"{KEY_PREFIX}{user_id}:{topic_id}:last_failed"
+
+
+async def mark_quiz_failed(
+    user_id: str,
+    topic_id: str,
+    ttl_seconds: int = QUIZ_FAIL_TTL_SECONDS,
+) -> None:
+    """Record that generation failed. While fresh, GET /quiz returns 404
+    instead of enqueuing another generate (which would loop forever)."""
+    client = await _get_client()
+    try:
+        await client.set(_fail_key(user_id, topic_id), "1", ex=ttl_seconds)
+    except Exception as e:
+        logger.warning(f"[QUIZ_CACHE] fail marker set failed for {user_id}/{topic_id}: {e}")
+    finally:
+        await _close(client)
+
+
+async def is_quiz_failed(user_id: str, topic_id: str) -> bool:
+    client = await _get_client()
+    try:
+        return bool(await client.exists(_fail_key(user_id, topic_id)))
+    except Exception:
+        return False
+    finally:
+        await _close(client)
+
+
+async def wait_for_quiz(
+    user_id: str,
+    topic_id: str,
+    *,
+    timeout_seconds: float = 90.0,
+    interval_seconds: float = 1.0,
+) -> Optional[dict[str, Any]]:
+    """Poll cache while another request is generating the same quiz."""
+    import asyncio
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        cached = await get_quiz(user_id, topic_id, refresh_ttl=True)
+        if cached and cached.get("questions"):
+            return cached
+        await asyncio.sleep(interval_seconds)
+    return None
 
 
 async def consume_quiz(

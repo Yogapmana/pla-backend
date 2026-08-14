@@ -4,7 +4,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-COURSE_SynapsaTFORMS = [
+COURSE_PLATFORMS = [
     "site:udemy.com",
     "site:coursera.org",
     "site:edx.org",
@@ -17,7 +17,7 @@ def discover_courses(query: str, max_results: int = 5) -> list[dict]:
     Discover relevant online courses using Tavily site-scoped search.
     Returns CourseLink-compatible metadata (not full text — embed_mode=False).
     """
-    site_filter = " OR ".join(COURSE_SynapsaTFORMS)
+    site_filter = " OR ".join(COURSE_PLATFORMS)
     search_query = f"{query} course tutorial ({site_filter})"
 
     try:

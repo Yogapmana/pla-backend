@@ -33,13 +33,13 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.drop_index(op.f('checkpoints_thread_id_idx'), table_name='checkpoints')
-    op.drop_table('checkpoints')
-    op.drop_index(op.f('checkpoint_blobs_thread_id_idx'), table_name='checkpoint_blobs')
-    op.drop_table('checkpoint_blobs')
-    op.drop_index(op.f('checkpoint_writes_thread_id_idx'), table_name='checkpoint_writes')
-    op.drop_table('checkpoint_writes')
-    op.drop_table('checkpoint_migrations')
+    op.drop_index(op.f('checkpoints_thread_id_idx'), table_name='checkpoints', if_exists=True)
+    op.drop_table('checkpoints', if_exists=True)
+    op.drop_index(op.f('checkpoint_blobs_thread_id_idx'), table_name='checkpoint_blobs', if_exists=True)
+    op.drop_table('checkpoint_blobs', if_exists=True)
+    op.drop_index(op.f('checkpoint_writes_thread_id_idx'), table_name='checkpoint_writes', if_exists=True)
+    op.drop_table('checkpoint_writes', if_exists=True)
+    op.drop_table('checkpoint_migrations', if_exists=True)
     # ### end Alembic commands ###
 
 
@@ -84,5 +84,5 @@ def downgrade() -> None:
     sa.PrimaryKeyConstraint('thread_id', 'checkpoint_ns', 'checkpoint_id', name=op.f('checkpoints_pkey'))
     )
     op.create_index(op.f('checkpoints_thread_id_idx'), 'checkpoints', ['thread_id'], unique=False)
-    op.drop_table('notifications')
+    op.drop_table('notifications', if_exists=True)
     # ### end Alembic commands ###

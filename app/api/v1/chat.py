@@ -1,17 +1,20 @@
 import uuid
-import asyncio
+import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.database import get_db, async_sessionmaker
+from app.db.database import get_db
 from app.dependencies import get_current_user
 from app.models.user import User
-from app.schemas.chat import ChatRequest, ChatResponse, ChatHistoryMessage, ChatSource, RAGMetrics, RAGASSummary, ChatSessionCreate, ChatSessionResponse
+from app.schemas.chat import (
+    ChatRequest, ChatResponse, ChatHistoryMessage, ChatSource, RAGMetrics,
+    RAGASSummary, ChatSessionCreate, ChatSessionResponse,
+    ChatJobAccepted, ChatJobStatus,
+)
 from app.services.learning_service import LearningService
-from app.agents.tutor import tutor_chat
-from app.agents.general_chatbot import general_chatbot_chat
+from app.tasks.chat_tasks import tutor_chat_task, general_chatbot_task
+from app.utils.redis_client import get_redis
 from app.rag.indexer import extract_text_from_file, index_uploaded_document
-from app.rag.evaluator import get_rag_evaluator
 from app.models.agent import ChatMessage
 from app.models.learning import LearningSession
 import re
@@ -23,50 +26,6 @@ def strip_hidden_content(text: str) -> str:
     return re.sub(r'<!-- UPLOADED_DOCUMENT_CONTENT:.*?-->', '', text, flags=re.DOTALL).strip()
 
 router = APIRouter()
-
-
-async def _run_ragas_background(
-    db_url: str,
-    message_id: str,
-    question: str,
-    answer: str,
-    contexts: list[str],
-) -> None:
-    """
-    Background task: score a chat response with RAGAS (or fallback)
-    and update the chat_messages row. Never raises.
-    """
-    try:
-        evaluator = get_rag_evaluator()
-        if evaluator is None:
-            return
-        scores = await evaluator.evaluate(question, answer, contexts)
-        if scores.get("rag_faithfulness") is None and scores.get("rag_answer_relevancy") is None:
-            return
-        # Use a fresh session (background task can't share request session)
-        from app.config import settings
-        from sqlalchemy.ext.asyncio import create_async_engine
-        engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
-        SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-        async with SessionLocal() as db:
-            from sqlalchemy import update
-            await db.execute(
-                update(ChatMessage)
-                .where(ChatMessage.id == uuid.UUID(message_id))
-                .values(
-                    rag_faithfulness=scores.get("rag_faithfulness"),
-                    rag_answer_relevancy=scores.get("rag_answer_relevancy"),
-                )
-            )
-            await db.commit()
-        logger.info(
-            f"[RAGAS] Scored message {message_id[:8]}... "
-            f"faith={scores.get('rag_faithfulness'):.2f} "
-            f"rel={scores.get('rag_answer_relevancy'):.2f} "
-            f"method={scores.get('method')}"
-        )
-    except Exception as e:
-        logger.error(f"[RAGAS] Background eval failed: {e}")
 
 @router.get("/sessions", response_model=list[ChatSessionResponse])
 async def get_chat_sessions(
@@ -116,19 +75,29 @@ async def delete_chat_session(
     await service.delete_session(uuid.UUID(session_id))
     return {"status": "success"}
 
-@router.post("/message", response_model=ChatResponse)
+@router.post("/message", status_code=202, response_model=ChatJobAccepted)
 async def send_message(
     request: ChatRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """
+    Accept a chat message and enqueue the LLM work to Celery.
+
+    Returns 202 + job_id immediately; the assistant reply is generated in a
+    Celery task and persisted. Poll GET /chat/job/{job_id} for completion.
+    """
     try:
         service = LearningService(db)
 
         # Verify the session belongs to the current user
-        session = await service.get_session(request.session_id)
-        if not session or session.user_id != current_user.id:
-            raise HTTPException(status_code=404, detail="Learning session not found")
+        from app.dependencies import verify_session_owner, verify_topic_owner
+
+        session = await verify_session_owner(request.session_id, current_user, db)
+        if request.topic_id:
+            await verify_topic_owner(
+                request.topic_id, current_user, db, require_session_id=session.id
+            )
 
         # Get recent chat history for context
         history_msgs = await service.get_chat_history(request.session_id, request.topic_id)
@@ -137,7 +106,7 @@ async def send_message(
             for msg in history_msgs
         ]
 
-        # Save user message
+        # Save user message immediately so the UI shows it without waiting
         await service.save_chat_message(
             session_id=request.session_id,
             topic_id=request.topic_id,
@@ -145,9 +114,9 @@ async def send_message(
             content=request.message,
         )
 
-        # Call appropriate Agent
+        # Enqueue the LLM work off the request path.
         if request.topic_id:
-            result = await tutor_chat(
+            task = tutor_chat_task.delay(
                 user_id=str(current_user.id),
                 session_id=str(request.session_id),
                 topic_id=request.topic_id,
@@ -157,55 +126,40 @@ async def send_message(
                 include_sources=request.include_sources,
             )
         else:
-            result = await general_chatbot_chat(
+            task = general_chatbot_task.delay(
                 user_id=str(current_user.id),
                 session_id=str(request.session_id),
                 query=request.message,
                 chat_history=chat_history,
             )
-
-        # Save assistant response
-        saved_msg = await service.save_chat_message(
-            session_id=request.session_id,
-            topic_id=request.topic_id,
-            role="assistant",
-            content=result["response"],
-            sources=result.get("sources", []),
-            latency_ms=result.get("latency_ms"),
-        )
-
-        # ── Fire-and-forget RAGAS evaluation (Phase polish #1) ──
-        chunks = result.get("chunks", [])
-        contexts = [c.get("text", "") for c in chunks] if chunks else []
-        if not contexts and result.get("sources"):
-            contexts = [s.get("title", "") for s in result.get("sources", [])]
-
-        asyncio.create_task(
-            _run_ragas_background(
-                db_url=str(request.session_id),
-                message_id=str(saved_msg.id),
-                question=request.message,
-                answer=result["response"],
-                contexts=contexts,
-            )
-        )
-
-        return ChatResponse(
-            message_id=str(saved_msg.id),
-            response=result["response"],
-            sources=[
-                ChatSource(**s) for s in result.get("sources", [])
-            ],
-            rag_metrics=RAGMetrics(
-                latency_ms=result.get("latency_ms", 0),
-                chunks_used=result.get("chunks_used", 0),
-            ),
-        )
+        return ChatJobAccepted(job_id=task.id)
     except Exception as e:
         import traceback
         err_msg = traceback.format_exc()
         logger.error(f"Error in chat endpoint: {err_msg}")
         raise HTTPException(status_code=400, detail=str(err_msg))
+
+
+@router.get("/job/{job_id}", response_model=ChatJobStatus)
+async def get_chat_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Poll the status of a chat job (Celery task id from POST /chat/message).
+
+    Status is one of: queued | running | done | failed. 404 when the job
+    record has expired (TTL 15 min) — the client should refetch chat history.
+    """
+    r = await get_redis()
+    raw = await r.get(f"chat_job:{job_id}")
+    if not raw:
+        raise HTTPException(
+            status_code=404,
+            detail="Chat job tidak ditemukan atau sudah kedaluwarsa.",
+        )
+    data = json.loads(raw)
+    return ChatJobStatus(job_id=job_id, **data)
 
 
 @router.get("/history", response_model=list[ChatHistoryMessage])
@@ -218,10 +172,14 @@ async def get_chat_history(
     db: AsyncSession = Depends(get_db),
 ):
     """Get chat history for a specific topic."""
+    from app.dependencies import verify_session_owner, verify_topic_owner
+
     service = LearningService(db)
-    session = await service.get_session(session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
+    session = await verify_session_owner(session_id, current_user, db)
+    if topic_id:
+        await verify_topic_owner(
+            topic_id, current_user, db, require_session_id=session.id
+        )
 
     messages = await service.get_chat_history(session_id, topic_id, limit, offset)
     return [
@@ -247,12 +205,21 @@ async def get_ragas_summary(
     Aggregate RAGAS scores across all chat messages in a session.
     Used by the dashboard widget to show the user the average quality
     of Tutor RAG responses over time.
+
+    Results are cached in Redis (TTL 10 min) — invalidated when a new
+    assistant message is scored or history is cleared.
     """
     from sqlalchemy import select, func
+    from app.services import metrics_cache
+
     service = LearningService(db)
     session = await service.get_session(session_id)
     if not session or session.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Learning session not found")
+
+    cached = await metrics_cache.get_ragas_summary(str(session_id))
+    if cached is not None:
+        return RAGASSummary(**cached)
 
     # Aggregate
     from sqlalchemy import case
@@ -301,7 +268,7 @@ async def get_ragas_summary(
     """).bindparams(sid=session_id)
     p95_row = (await db.execute(p95_stmt)).one()
 
-    return RAGASSummary(
+    summary = RAGASSummary(
         session_id=str(session_id),
         total_messages=int(row.total or 0),
         scored_messages=int(scored_count or 0),
@@ -311,6 +278,8 @@ async def get_ragas_summary(
         p95_answer_relevancy=float(p95_row.p95_rel) if p95_row.p95_rel is not None else None,
         flagged_messages=int(row.flagged or 0),
     )
+    await metrics_cache.set_ragas_summary(str(session_id), summary.model_dump())
+    return summary
 
 
 @router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
@@ -323,17 +292,20 @@ async def delete_chat_history(
     """Delete all chat history for a specific topic."""
     from sqlalchemy import delete
     from app.models.agent import ChatMessage
-    service = LearningService(db)
-    session = await service.get_session(session_id)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
+    from app.dependencies import verify_session_owner, verify_topic_owner
+
+    session = await verify_session_owner(session_id, current_user, db)
+    if topic_id is not None:
+        await verify_topic_owner(
+            topic_id, current_user, db, require_session_id=session.id
+        )
 
     query = delete(ChatMessage).where(ChatMessage.session_id == session_id)
     if topic_id is not None:
         query = query.where(ChatMessage.topic_id == topic_id)
     else:
         query = query.where(ChatMessage.topic_id.is_(None))
-        
+
     await db.execute(query)
     await db.commit()
 
@@ -346,6 +318,8 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a document to be indexed for RAG within a specific topic."""
+    from app.dependencies import verify_session_owner, verify_topic_owner
+
     service = LearningService(db)
 
     try:
@@ -353,9 +327,11 @@ async def upload_document(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid session_id format")
 
-    session = await service.get_session(session_uuid)
-    if not session or session.user_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Learning session not found")
+    session = await verify_session_owner(session_uuid, current_user, db)
+    if topic_id:
+        await verify_topic_owner(
+            topic_id, current_user, db, require_session_id=session.id
+        )
 
     # Read file
     file_bytes = await file.read()

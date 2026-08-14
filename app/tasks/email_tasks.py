@@ -6,7 +6,7 @@ from app.services.email_service import (
     send_welcome_email, send_daily_reminder_email, send_progress_email,
     send_verification_email, send_password_reset_email,
 )
-from app.db.database import SessionLocal
+from app.db.database import SessionLocal, engine
 from app.models.user import User
 
 @celery_app.task(name="app.tasks.send_welcome_email_task")
@@ -34,6 +34,7 @@ def send_progress_email_task(email: str, username: str, topic: str):
     return f"Progress email sent to {email} for {topic}"
 
 async def _check_and_send_daily_reminders():
+    engine.sync_engine.dispose(close=False)
     today = date.today()
     async with SessionLocal() as db:
         # Find users who haven't logged in today
