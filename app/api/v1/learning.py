@@ -462,7 +462,13 @@ async def complete_topic(
     topic = await service.update_topic_status(topic_id, "completed")
     logger.info(f"[COMPLETE] Topic {topic_id} status updated to: {topic.status}")
 
-    send_progress_email_task.delay(current_user.email, current_user.username, topic.title)
+    # Honor the user's notification preferences: only send the
+    # progress email when "email notifications" is enabled.
+    from app.services.notification_service import NotificationService
+    notif_service = NotificationService(db)
+    prefs = await notif_service.get_preferences(current_user.id)
+    if prefs.email_enabled:
+        send_progress_email_task.delay(current_user.email, current_user.username, topic.title)
 
     next_topic = await service.activate_next_topic(session_id, topic_id)
 

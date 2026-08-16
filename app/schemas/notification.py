@@ -14,3 +14,16 @@ class NotificationResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationPreferencesResponse(BaseModel):
+    email_enabled: bool = True
+    push_enabled: bool = True
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    email_enabled: bool = True
+    push_enabled: bool = True

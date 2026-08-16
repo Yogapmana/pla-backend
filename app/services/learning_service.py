@@ -101,13 +101,48 @@ class LearningService:
         )
         return list(result.scalars().all())
 
+    async def purge_session_data(self, session_id: UUID) -> None:
+        """Delete all rows that reference a session but are NOT removed by the
+        DB's ``ON DELETE CASCADE`` on ``learning_sessions``.
+
+        ``learning_modules`` and ``resource_links`` reference the session and
+        its topics with NO ACTION foreign keys — if they survive, the cascade
+        delete of ``topics`` fails with a foreign-key violation and the whole
+        session delete 500s. Delete them explicitly first, then let the DB
+        cascade handle the rest (curricula, topics, chat, quiz, signals, logs).
+        """
+        from sqlalchemy import delete as sa_delete
+
+        await self.db.execute(
+            sa_delete(ResourceLink).where(ResourceLink.session_id == session_id)
+        )
+        await self.db.execute(
+            sa_delete(LearningModule).where(LearningModule.session_id == session_id)
+        )
+
     async def delete_session(self, session_id: UUID) -> bool:
         session = await self.get_session(session_id)
         if not session:
             return False
+        await self.purge_session_data(session_id)
         await self.db.delete(session)
         await self.db.commit()
         return True
+
+    async def purge_user_sessions(self, user_id: UUID) -> None:
+        """Delete every learning session (including General Chat sessions)
+        belonging to the user, along with their non-cascading children.
+
+        Used by account deletion so that ``users`` can be removed without a
+        foreign-key violation on the session-level tables.
+        """
+        result = await self.db.execute(
+            select(LearningSession).where(LearningSession.user_id == user_id)
+        )
+        sessions = list(result.scalars().all())
+        for session in sessions:
+            await self.purge_session_data(session.id)
+            await self.db.delete(session)
 
     async def save_curriculum(self, session_id: UUID, curriculum_json: dict, version: int = 1) -> Curriculum:
         from app.models.learning import Curriculum

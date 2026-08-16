@@ -306,6 +306,16 @@ async def delete_user_account(
     db: AsyncSession = Depends(get_db),
 ):
     """Permanently delete the current user's account and related data."""
+    # `users` cascades to `learning_sessions`, but the session-level tables
+    # (learning_modules / resource_links) reference sessions with NO ACTION
+    # foreign keys — deleting the user directly would raise a FK violation.
+    # Purge every session (and its non-cascading children) first.
+    from app.services.learning_service import LearningService
+    learning_service = LearningService(db)
+    await learning_service.purge_user_sessions(current_user.id)
+
+    # The remaining user-owned rows (notifications, xp_events,
+    # login_events, refresh_tokens, notification_settings) all cascade.
     await revoke_all_user_refresh_tokens(db, current_user.id)
     await db.delete(current_user)
     await db.commit()

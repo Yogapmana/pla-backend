@@ -45,7 +45,16 @@ async def _check_and_send_daily_reminders():
         )
         users = result.scalars().all()
 
+        from app.services.notification_service import NotificationService
+        notif_service = NotificationService(db)
+
         for user in users:
+            # Respect the per-user email preference — users who turned
+            # "email notifications" off don't get daily reminders.
+            prefs = await notif_service.get_preferences(user.id)
+            if not prefs.email_enabled:
+                continue
+
             # We trigger the synchronous send_daily_reminder_email directly or via celery task
             # Sending directly since we are already in an async background job, but it's better to
             # dispatch a celery task for each to avoid blocking or failing halfway

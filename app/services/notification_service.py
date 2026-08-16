@@ -2,10 +2,56 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.notification import Notification
+from app.models.notification_setting import NotificationSetting
 
 class NotificationService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def get_preferences(self, user_id: str | UUID) -> NotificationSetting:
+        """Fetch the user's notification preferences, creating a row
+        with server defaults (both enabled) the first time it is read.
+
+        A row is flushed (not committed) when missing so that the
+        surrounding transaction stays intact; the caller's eventual
+        commit persists it.
+        """
+        if isinstance(user_id, str):
+            user_id = UUID(user_id)
+
+        result = await self.db.execute(
+            select(NotificationSetting).where(NotificationSetting.user_id == user_id)
+        )
+        prefs = result.scalar_one_or_none()
+        if prefs is None:
+            prefs = NotificationSetting(user_id=user_id)
+            self.db.add(prefs)
+            await self.db.flush()
+        return prefs
+
+    async def update_preferences(
+        self,
+        user_id: str | UUID,
+        email_enabled: bool = True,
+        push_enabled: bool = True,
+    ) -> NotificationSetting:
+        """Persist the user's notification preferences."""
+        if isinstance(user_id, str):
+            user_id = UUID(user_id)
+
+        result = await self.db.execute(
+            select(NotificationSetting).where(NotificationSetting.user_id == user_id)
+        )
+        prefs = result.scalar_one_or_none()
+        if prefs is None:
+            prefs = NotificationSetting(user_id=user_id)
+            self.db.add(prefs)
+
+        prefs.email_enabled = email_enabled
+        prefs.push_enabled = push_enabled
+        await self.db.commit()
+        await self.db.refresh(prefs)
+        return prefs
 
     async def get_user_notifications(self, user_id: str | UUID, limit: int = 50):
         if isinstance(user_id, str):
@@ -22,7 +68,13 @@ class NotificationService:
     async def create_notification(self, user_id: str | UUID, title: str, message: str, notification_type: str, link: str = None):
         if isinstance(user_id, str):
             user_id = UUID(user_id)
-            
+
+        # Honor the user's push preference. Missing rows default to
+        # enabled, so existing users keep receiving notifications.
+        prefs = await self.get_preferences(user_id)
+        if prefs is not None and not prefs.push_enabled:
+            return None
+
         notification = Notification(
             user_id=user_id,
             title=title,
